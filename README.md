@@ -1,10 +1,11 @@
+
 OpenEPG
 ========
 
 Electronic Program Guide (EPG) Generator for Digital Video Broadcasting (DVB). EIT p/f, EIT schedule generation and broadcasting.
 
 
-====== Описание OpenEPG ======
+#### Описание OpenEPG
 
 Возможности модуля 
   * Много поточный сервер
@@ -21,20 +22,21 @@ Electronic Program Guide (EPG) Generator for Digital Video Broadcasting (DVB). E
 
 
 Сервер реализован на языке Perl, что позволяет его использовать на любой платформе, которую поддерживает Perl.
-Базой для написания сервера послужила реализация [[http://epg.cherryhill.eu/|CherryEPG]]
+Базой для написания сервера послужила реализация [CherryEPG](http://epg.cherryhill.eu/|CherryEPG)
 
-====== Установка OpenEPG ======
-Исходный код сервера расположен на сервере [[https://github.com/dshumko/OpenEPG|github]]
+#### Установка OpenEPG
 
-==== Использование бинарного файла (Windows) ====
+
+#### Использование бинарного файла (Windows) 
 Самый простой и быстрый способ.
-  - Загрузите файл [[http://a4on.tv/|openepg.zip]]
+  - Загрузите [исполняемый файл](http://a4on.tv/openepg.zip)
   - распакуйте
   - пропишите свои данный в ini файле 
   - запустите сервер.
 **Готово!**
 
-==== Использование Perl (Windows или Linux) ====
+#### Использование Perl (Windows или Linux) 
+
 Этот способ подойдет тем, кто знаком с языком программирования Perl
 Подробно данный метод описывать не будем.
 Сервер использует следующие модули
@@ -42,12 +44,16 @@ Electronic Program Guide (EPG) Generator for Digital Video Broadcasting (DVB). E
 cpan DBD::Firebird
 cpan Digest::CRC
 cpan DVB::Epg 
+
+
 cpan DVB::Carousel
 cpan Config::INI::Reader
 </code>
 
-===== Описание параметров INI файла =====
-^Параметр^Значение по умолчанию^Описание^
+#### Описание параметров INI файла
+
+|Параметр|Значение по умолчанию|Описание|
+|-|-|-|
 |DB_NAME | localhost:a4on_db|база данных с epg|
 |DB_USER | SYSDBA|пользователь базый данных Firebird |
 |DB_PSWD | masterkey|пароль пользователя |
