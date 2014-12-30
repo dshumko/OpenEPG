@@ -26,10 +26,11 @@ Electronic Program Guide (EPG) Generator for Digital Video Broadcasting (DVB). E
 
 #### Установка OpenEPG
 
+[Видео по настройке и запуску openepg](https://www.youtube.com/watch?v=Nh9wbCZjFqs) 
 
 #### Использование бинарного файла (Windows) 
 Самый простой и быстрый способ.
-  - Загрузите [исполняемый файл](http://a4on.tv/openepg.zip)
+  - Загрузите [исполняемый файл openepg.exe](http://a4on.tv/uploads/files/openepg.zip)
   - распакуйте
   - пропишите свои данный в ini файле 
   - запустите сервер.
