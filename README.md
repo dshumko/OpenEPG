@@ -4,7 +4,6 @@ OpenEPG
 
 Electronic Program Guide (EPG) Generator for Digital Video Broadcasting (DVB). EIT p/f, EIT schedule generation and broadcasting.
 
-
 #### Описание OpenEPG
 
 Возможности модуля 
@@ -22,8 +21,7 @@ Electronic Program Guide (EPG) Generator for Digital Video Broadcasting (DVB). E
 
 
 Сервер реализован на языке Perl, что позволяет его использовать на любой платформе, которую поддерживает Perl.
-Базой для написания сервера послужила реализация [CherryEPG](http://epg.cherryhill.eu/|CherryEPG)
-Интегрирован с биллингом [A4on.TV](http://A4on.TV)
+Базой для написания сервера послужила реализация [CherryEPG](http://epg.cherryhill.eu/|CherryEPG) и интегрирован с биллингом [A4on.TV](http://A4on.TV)
 
 #### Установка OpenEPG
 
