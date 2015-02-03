@@ -23,21 +23,21 @@ $epg_config{"DB_NAME"} = 'localhost:epg';
 $epg_config{"DB_USER"} = 'SYSDBA';
 $epg_config{"DB_PSWD"} = 'masterkey';
 $epg_config{"BIND_IP"} = '0.0.0.0';
-$epg_config{"DAYS"}    = 7; # �� ᪮�쪮 ���� �ନ஢��� EIT
-$epg_config{"TMP"}     = cwd; # �㤠 ��࠭��� �६���� 䠩��
-$epg_config{"RELOAD_TIME"} = 5; # ��१ ᪮�쪮 ����� �����뢠�� ��⮪
-$epg_config{"EXPORT_TS"}   = '0'; # ��ᯮ��஢��� TS � 䠩�
-$epg_config{"NETWORK_ID"}  = ''; # ID �� � ���ன ࠡ�⠥� �������
+$epg_config{"DAYS"}    = 7; # На сколько дней формировать EIT
+$epg_config{"TMP"}     = cwd; # Куда сохранять времменые файлы
+$epg_config{"RELOAD_TIME"} = 5; # Через сколько минут перечитывать поток
+$epg_config{"EXPORT_TS"}   = '0'; # Экспортировать TS в файл
+$epg_config{"NETWORK_ID"}  = ''; # ID сети с которой работает генератор
 
-# ���⠥� EPG.INI  � ������� ����� ����ன�� ���祭�ﬨ � 䠩��. ࠧ��� "EPG" 
+# Прочитаем EPG.INI  и заменим дефлтные настройки значениями с файла. раздел "EPG" 
 my $ini = Config::INI::Reader->read_file('openepg.ini');
 if (exists $ini->{'EPG'}) {
     %epg_config = (%epg_config, %{$ini->{'EPG'}});
 }
 
-# �஢�ਬ �⮡ ���ਪ��� �뫠 � ᫥襬 � ����
+# проверим чтоб дерриктория была со слешем в конце
 if ((substr($epg_config{"TMP"}, -1) ne '/') and (substr($epg_config{"TMP"}, -1) ne '\\')) {
-    $epg_config{"TMP"} = $epg_config{"TMP"}."/"; # ������� ����뢠�騩 ���
+    $epg_config{"TMP"} = $epg_config{"TMP"}."/"; # добавим закрывающий слэш
 }
 mkdir $epg_config{"TMP"};
 
@@ -57,15 +57,15 @@ my $sth_s = $fbDb->prepare($sel_q);
 $sth_s->execute or die "ERROR: Failed execute SQL!";
 my @threads;
 while (my ($dvbs_id, $aostrm, $country) = $sth_s->fetchrow_array()) {
-    $epg_config{"ACTUAL_OTHER"} = $aostrm; # ��।����� �� ⥪�騩/᫥���騩 ��⮪ � ����� UDP ��⮪�
-    $epg_config{"COUNTRY"} = $country;     # �� ��-㬮�砭��
+    $epg_config{"ACTUAL_OTHER"} = $aostrm; # Передавать ли текущий/следующий поток в одном UDP потоке
+    $epg_config{"COUNTRY"} = $country;     # язык по-умолчанию
     $epg_config{"DVBS_ID"} = $dvbs_id;
     push @threads, threads->create(\&RunThread, %epg_config);
     #RunThread(%epg_config); #for debug run without threads
 } 
 $fbDb->disconnect();
 
-# �� ����� ���������� �ணࠬ��, ���� ࠡ���� �� ��⮪�
+# Не дадим завершиться программе, пока работают все потоки
 foreach my $thread (@threads) {
     $thread->join();
 }
@@ -138,7 +138,7 @@ sub InitEitDb {
                   from Dvb_Network n
                        inner join Dvb_Streams s on (n.Dvbn_Id = s.Dvbn_Id)
                        inner join Dvb_Stream_Channels sc on (s.Dvbs_Id = sc.Dvbs_Id)";
-    # �㤥� �� ��।����� ����� ��㣮�� ��⮪�
+    # Будем ли передавать данные другого потока
     if ($cfg{"ACTUAL_OTHER"} == 1) {
         $sel_q = $sel_q." where n.Dvbn_Id in (select a.Dvbn_Id from Dvb_Streams a where a.Dvbs_Id = $dvbsid) ";
     }

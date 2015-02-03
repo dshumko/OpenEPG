@@ -46,6 +46,7 @@ cpan Digest::CRC
 cpan DVB::Epg 
 cpan DVB::Carousel
 cpan Config::INI::Reader
+cpan IO::Socket::Multicast
 ```
 
 #### Описание параметров INI файла
