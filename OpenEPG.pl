@@ -10,12 +10,12 @@ use Time::Local;
 use DBD::Firebird; 
 use Encode;
 use utf8;
-use Socket;
 use POSIX qw(ceil);
 use Time::HiRes qw(usleep time);
 use Config::INI::Reader;
 use Cwd;
 use threads;
+use IO::Socket::Multicast;
 
 my %epg_config = ();
 
@@ -23,21 +23,21 @@ $epg_config{"DB_NAME"} = 'localhost:epg';
 $epg_config{"DB_USER"} = 'SYSDBA';
 $epg_config{"DB_PSWD"} = 'masterkey';
 $epg_config{"BIND_IP"} = '0.0.0.0';
-$epg_config{"DAYS"}    = 7; # Íà ñêîëüêî äíåé ôîğìèğîâàòü EIT
-$epg_config{"TMP"}     = cwd; # Êóäà ñîõğàíÿòü âğåììåíûå ôàéëû
-$epg_config{"RELOAD_TIME"} = 5; # ×åğåç ñêîëüêî ìèíóò ïåğå÷èòûâàòü ïîòîê
-$epg_config{"EXPORT_TS"}   = '0'; # İêñïîğòèğîâàòü TS â ôàéë
-$epg_config{"NETWORK_ID"}  = ''; # ID ñåòè ñ êîòîğîé ğàáîòàåò ãåíåğàòîğ
+$epg_config{"DAYS"}    = 7; #   áª®«ìª® ¤­¥© ä®à¬¨à®¢ âì EIT
+$epg_config{"TMP"}     = cwd; # Šã¤  á®åà ­ïâì ¢à¥¬¬¥­ë¥ ä ©«ë
+$epg_config{"RELOAD_TIME"} = 5; # —¥à¥§ áª®«ìª® ¬¨­ãâ ¯¥à¥ç¨âë¢ âì ¯®â®ª
+$epg_config{"EXPORT_TS"}   = '0'; # ªá¯®àâ¨à®¢ âì TS ¢ ä ©«
+$epg_config{"NETWORK_ID"}  = ''; # ID á¥â¨ á ª®â®à®© à ¡®â ¥â £¥­¥à â®à
 
-# Ïğî÷èòàåì EPG.INI  è çàìåíèì äåôëòíûå íàñòğîéêè çíà÷åíèÿìè ñ ôàéëà. ğàçäåë "EPG" 
-my $ini = Config::INI::Reader->read_file('a4on_epg.ini');
+# à®ç¨â ¥¬ EPG.INI  ¨ § ¬¥­¨¬ ¤¥ä«â­ë¥ ­ áâà®©ª¨ §­ ç¥­¨ï¬¨ á ä ©« . à §¤¥« "EPG" 
+my $ini = Config::INI::Reader->read_file('openepg.ini');
 if (exists $ini->{'EPG'}) {
     %epg_config = (%epg_config, %{$ini->{'EPG'}});
 }
 
-# ïğîâåğèì ÷òîá äåğğèêòîğèÿ áûëà ñî ñëåøåì â êîíöå
+# ¯à®¢¥à¨¬ çâ®¡ ¤¥àà¨ªâ®à¨ï ¡ë«  á® á«¥è¥¬ ¢ ª®­æ¥
 if ((substr($epg_config{"TMP"}, -1) ne '/') and (substr($epg_config{"TMP"}, -1) ne '\\')) {
-    $epg_config{"TMP"} = $epg_config{"TMP"}."/"; # äîáàâèì çàêğûâàşùèé ñëıø
+    $epg_config{"TMP"} = $epg_config{"TMP"}."/"; # ¤®¡ ¢¨¬ § ªàë¢ îé¨© á«íè
 }
 mkdir $epg_config{"TMP"};
 
@@ -51,21 +51,21 @@ if ($epg_config{"NETWORK_ID"} eq '') {
     $sel_q = $sel_q . " where n.Dvbn_Id in (select first 1 d.Dvbn_Id from Dvb_Network d) "; 
 }
 else {
-    $sel_q = $sel_q . " where n.Dvbn_Id = ".$epg_config{"NETWORK_ID"}; 
+    $sel_q = $sel_q . " where n.NID = ".$epg_config{"NETWORK_ID"}; 
 }
 my $sth_s = $fbDb->prepare($sel_q);
 $sth_s->execute or die "ERROR: Failed execute SQL!";
 my @threads;
 while (my ($dvbs_id, $aostrm, $country) = $sth_s->fetchrow_array()) {
-    $epg_config{"ACTUAL_OTHER"} = $aostrm; # Ïåğåäàâàòü ëè òåêóùèé/ñëåäóşùèé ïîòîê â îäíîì UDP ïîòîêå
-    $epg_config{"COUNTRY"} = $country;     # ÿçûê ïî-óìîë÷àíèş
+    $epg_config{"ACTUAL_OTHER"} = $aostrm; # ¥à¥¤ ¢ âì «¨ â¥ªãé¨©/á«¥¤ãîé¨© ¯®â®ª ¢ ®¤­®¬ UDP ¯®â®ª¥
+    $epg_config{"COUNTRY"} = $country;     # ï§ëª ¯®-ã¬®«ç ­¨î
     $epg_config{"DVBS_ID"} = $dvbs_id;
     push @threads, threads->create(\&RunThread, %epg_config);
     #RunThread(%epg_config); #for debug run without threads
 } 
 $fbDb->disconnect();
 
-# Íå äàäèì çàâåğøèòüñÿ ïğîãğàììå, ïîêà ğàáîòàşò âñå ïîòîêè
+# ¥ ¤ ¤¨¬ § ¢¥àè¨âìáï ¯à®£à ¬¬¥, ¯®ª  à ¡®â îâ ¢á¥ ¯®â®ª¨
 foreach my $thread (@threads) {
     $thread->join();
 }
@@ -91,16 +91,15 @@ sub RunThread {
     
     InitEitDb($tsDb, %cfg);
     
-    socket( my $tsSocket, PF_INET, SOCK_DGRAM, getprotobyname('udp')) or die( "Error opening udp socket: $!");
+    my $tsSocket = IO::Socket::Multicast->new(Proto=>'udp') || die "Couldn't open socket";
     
-    if ( $cfg{"BIND_IP"} ne '0.0.0.0' ) {
+    if ( $cfg{"BIND_IP"} ne '0.0.0.0') {
         my $inet_addr = inet_aton($cfg{"BIND_IP"});
-        my $paddr     = sockaddr_in($UDPport, $inet_addr);
-        bind($tsSocket, $paddr) or die "bind:  $!";
+        $tsSocket->mcast_if($inet_addr);
     }
-    
-    my $ipaddr = inet_aton( $UDPhost);
-    my $sockaddr = sockaddr_in( $UDPport, $ipaddr);
+    $tsSocket->mcast_ttl(10);
+    $tsSocket->mcast_loopback(0);
+    $tsSocket->mcast_dest($UDPhost.':'.$UDPport);
     
     ReadEpgData($tsEpg, $tsCarousel, $tsDb, %cfg);
     while (1) {
@@ -114,7 +113,7 @@ sub RunThread {
             close( $ts );
         }
         
-        SendUDP($tsCarousel, $tsSocket, $sockaddr, %cfg);
+        SendUDP($tsCarousel, $tsSocket, %cfg);
     }
     
     $tsDb->disconnect();
@@ -139,7 +138,7 @@ sub InitEitDb {
                   from Dvb_Network n
                        inner join Dvb_Streams s on (n.Dvbn_Id = s.Dvbn_Id)
                        inner join Dvb_Stream_Channels sc on (s.Dvbs_Id = sc.Dvbs_Id)";
-    # Áóäåì ëè ïåğåäàâàòü äàííûå äğóãîãî ïîòîêà
+    # ã¤¥¬ «¨ ¯¥à¥¤ ¢ âì ¤ ­­ë¥ ¤àã£®£® ¯®â®ª 
     if ($cfg{"ACTUAL_OTHER"} == 1) {
         $sel_q = $sel_q." where n.Dvbn_Id in (select a.Dvbn_Id from Dvb_Streams a where a.Dvbs_Id = $dvbsid) ";
     }
@@ -267,16 +266,16 @@ sub BuildEPG {
     my $pid = 18;
     my $interval = 30;  # calculate the chunk for 30 seconds
     
-    if( $tsEPG->updateEit( $pid)) {
+    if( $tsEPG->updateEit( $pid )) {
         # Extract the snippet 
-        my $pes = $tsEPG->getEit( $pid, $interval);
+        my $pes = $tsEPG->getEit( $pid, $interval );
         print $cfg{"DVBS_ID"}." bitrate = ".( length( $pes )*8/$interval/1000 )." kbps\n";
-        $tsCarousel->addMts( $pid, \$pes, $interval*1000);
+        $tsCarousel->addMts( $pid, \$pes, $interval*1000 );
     }
 }
 
 sub SendUDP {
-    my ($carousel, $target, $portaddr, %cfg) = @_;
+    my ($carousel, $multicast, %cfg) = @_;
     my $continuityCounter = 0;
     my $start = time();
     
@@ -324,7 +323,7 @@ sub SendUDP {
             my $chunkCount = $mtsCount-$packetCounter;
             $chunkCount = 7 if $chunkCount > 7; 
             
-            send( $target, substr( $mts, $packetCounter * 188, $chunkCount * 188), 0, $portaddr);
+            $multicast->mcast_send(substr( $mts, $packetCounter * 188, $chunkCount * 188));
             $packetCounter += $chunkCount;
             usleep( $gap );
         }
