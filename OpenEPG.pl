@@ -174,7 +174,7 @@ sub ReadEpgData {
         
         if( $start =~ /^(\d+).(\d+).(\d+)\s+(\d+):(\d+):(\d+)$/) {
             my @t = ( $6, $5, $4, $1, $2-1, $3);
-            $event->{start} = timelocal(@t);
+            $event->{start} = timegm(@t);
         }        
         else {
             die( "Incorrect start time [$start]");
@@ -182,7 +182,7 @@ sub ReadEpgData {
         
         if( $stop =~ /^(\d+).(\d+).(\d+)\s+(\d+):(\d+):(\d+)$/) {
             my @t = ( $6, $5, $4, $1, $2-1, $3);
-            $event->{stop} = timelocal(@t);
+            $event->{stop} = timegm(@t);
         }        
         else {
             die( "Incorrect start time [$start]");
@@ -210,20 +210,34 @@ sub ReadEpgData {
         # 0x10 0x00 0x0D ISO/IEC 8859-13 [34] Baltic A.9
         # 0x10 0x00 0x0E ISO/IEC 8859-14 [35] Celtic A.10
         # 0x10 0x00 0x0F ISO/IEC 8859-15 [36] West European A.11
-        if   ($lang eq 'rus') { $title_ISO = encode("iso-8859-5", $title); $lang_prefix  = "\x10\x00\x5"; } # Russian
-        elsif($lang eq 'bel') { $title_ISO = encode("iso-8859-5", $title); $lang_prefix  = "\x10\x00\x5"; } # Belarusian
-        elsif($lang eq 'ukr') { $title_ISO = encode("iso-8859-5", $title); $lang_prefix  = "\x10\x00\x5"; } # Ukrainian
-        elsif($lang eq 'eng') { $title_ISO = encode("iso-8859-1", $title); $lang_prefix  = "\x10\x00\x1"; } # English
-        elsif($lang eq 'lav') { $title_ISO = encode("iso-8859-4", $title); $lang_prefix  = "\x10\x00\x4"; } # Latvian
-        elsif($lang eq 'lit') { $title_ISO = encode("iso-8859-4", $title); $lang_prefix  = "\x10\x00\x4"; } # Lithuanian
-        elsif($lang eq 'est') { $title_ISO = encode("iso-8859-4", $title); $lang_prefix  = "\x10\x00\x4"; } # Estonian
-        elsif($lang eq 'pol') { $title_ISO = encode("iso-8859-2", $title); $lang_prefix  = "\x10\x00\x2"; } # Polish
-        elsif($lang eq 'fra') { $title_ISO = encode("iso-8859-1", $title); $lang_prefix  = "\x10\x00\x1"; } # French
-        elsif($lang eq 'deu') { $title_ISO = encode("iso-8859-1", $title); $lang_prefix  = "\x10\x00\x1"; } # German
-        else {                  $title_ISO = encode("iso-8859-1", $title); $lang_prefix  = "\x10\x00\x1"; } # English
         
-        #my $title_ISO    = encode("iso-8859-5", $title);
-        $synopsis_ISO = encode("iso-8859-5", $synopsis);
+        if  (($lang eq 'rus')    # Russian
+            || ($lang eq 'bel')  # Belarusian
+            || ($lang eq 'ukr')) # Ukrainian
+        { 
+            $title_ISO    = encode("iso-8859-5", $title); 
+            $synopsis_ISO = encode("iso-8859-5", $synopsis);
+            $lang_prefix  = "\x10\x00\x5"; 
+        } 
+        elsif(($lang eq 'lav')   # Latvian
+            || ($lang eq 'lit')  # Lithuanian
+            || ($lang eq 'est')) # Estonian
+        {
+            $title_ISO    = encode("iso-8859-4", $title); 
+            $synopsis_ISO = encode("iso-8859-4", $synopsis);
+            $lang_prefix  = "\x10\x00\x4"; 
+        } 
+        elsif($lang eq 'pol')    # Polish
+        { 
+            $title_ISO    = encode("iso-8859-2", $title); 
+            $synopsis_ISO = encode("iso-8859-2", $synopsis);
+            $lang_prefix  = "\x10\x00\x2"; 
+        } 
+        else {                   # English German French
+            $title_ISO    = encode("iso-8859-1", $title); 
+            $synopsis_ISO = encode("iso-8859-1", $synopsis);
+            $lang_prefix  = "\x10\x00\x1"; 
+        } 
         
         my @descriptors;
         my $short_descriptor;
