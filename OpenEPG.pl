@@ -159,10 +159,18 @@ sub ReadEpgData {
     my ($tsEPG, $tsCarousel, $tsDb, %cfg) = @_;
     
     my $dvbsid     = $cfg{"DVBS_ID"};
+    
+    
+    #26.02.2015 23:50:00
+    my $attr = {
+        ib_timestampformat => '%d.%m.%Y %H:%M:%S',
+        ib_dateformat => '%d.%m.%Y',
+        ib_timeformat => '%H:%M:%S',
+     };    
     my $sel_q = "select 
                    ch_id, date_start, date_stop, title, description, minage, lower(lang)
                  from Get_Epg($dvbsid, null, null, ".$cfg{"ACTUAL_OTHER"}.")";
-    my $sth_s = $tsDb->prepare($sel_q);
+    my $sth_s = $tsDb->prepare($sel_q, $attr);
     $sth_s->execute or die "ERROR: Failed execute SQL!";
     
     while (my ($program, $start, $stop, $title, $synopsis, $minage, $lang) = $sth_s->fetchrow_array()) {
