@@ -1,0 +1,40 @@
+#! /bin/sh
+### BEGIN INIT INFO
+# Provides:          OpenEPG
+# Required-Start:
+# Required-Stop:
+# Default-Start:     2 3 4 5
+# Default-Stop:      6
+# Short-Description: OpenEPG
+# Description:
+### END INIT INFO
+
+PATH=/sbin:/usr/sbin:/bin:/usr/bin
+
+. /lib/lsb/init-functions
+
+do_stop () {
+	# Message should end with a newline since kFreeBSD may
+	# print more stuff (see #323749)
+	log_action_msg "Will now restart"
+	reboot -d -f -i
+}
+
+case "$1" in
+  start)
+	echo Started at `date +%F\ %T` >> /var/log/OpenEPG.log
+	/opt/OpenEPG/OpenEPG.pl >> /var/log/OpenEPG.log &
+	;;
+  restart|reload|force-reload)
+	service OpenEPG stop
+	sleep 1
+	service OpenEPG start
+	;;
+  stop)
+	killall OpenEPG.pl
+	;;
+  *)
+	echo "Usage: $0 start|stop" >&2
+	exit 3
+	;;
+esac

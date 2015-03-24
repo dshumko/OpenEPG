@@ -16,8 +16,12 @@ use Config::INI::Reader;
 use Cwd;
 use threads;
 use IO::Socket::Multicast;
+use IO::File;
 
 my %epg_config = ();
+
+#Ищем OpenEPG.ini файл в каталоге со скриптом
+my $ini_file = cwd.'/OpenEPG.ini';
 
 $epg_config{"DB_NAME"} = 'localhost:epg';
 $epg_config{"DB_USER"} = 'SYSDBA';
@@ -27,10 +31,41 @@ $epg_config{"DAYS"}    = 7; # На сколько дней формироват�
 $epg_config{"TMP"}     = cwd; # Куда сохранять времменые файлы
 $epg_config{"RELOAD_TIME"} = 5; # Через сколько минут перечитывать поток
 $epg_config{"EXPORT_TS"}   = '0'; # Экспортировать TS в файл
-$epg_config{"NETWORK_ID"}  = ''; # ID сети с которой работает генератор
+$epg_config{"NETWORK_ID"}  = ''; # NID сети с которой работает генератор
+$epg_config{"READ_EPG"}    = 1; # Через сколько часов будем проверять данные в базе A4on.TV
+
+# !!! не использовать, не готово !!!
+$epg_config{"TEXT_IN_UTF"} = 0; # Передавать текст событий в UTF8 а не в ISO 
+# при включении выдает ошибку - Character in 'C' format wrapped in pack at DVB/Epg.pm line 1353.
+
+# Проверим, если ini файл с сигнатурой BOM, то удалим ее
+my $fh = new IO::File "< $ini_file" or die "Cannot open $ini_file : $!";
+binmode($fh);
+
+my $buf;
+my $bom = "\xef\xbb\xbf";
+my $len = length($bom);
+my $buflen = 3;
+
+read($fh,$buf,$len);
+if (substr($buf, 0, 3) eq substr($bom, 0, 3)) {
+    my $fw = new IO::File "> $ini_file.new" or die "Cannot open $ini_file : $!";
+    binmode($fw);
+    my $buflen = (stat($fh))[7];
+    while (read($fh,$buf,$buflen)) {
+        print $fw $buf or die "Write to $ini_file failed: $!";
+    }
+    close($fw) or die "Error closing $ini_file : $!";
+    close($fh) or die "Error closing $ini_file : $!";
+    unlink($ini_file);
+    rename "$ini_file.new", "$ini_file";
+}
+else {
+    close($fh) or die "Error closing $ini_file : $!";
+}
 
 # Прочитаем EPG.INI  и заменим дефлтные настройки значениями с файла. раздел "EPG" 
-my $ini = Config::INI::Reader->read_file('openepg.ini');
+my $ini = Config::INI::Reader->read_file($ini_file);
 if (exists $ini->{'EPG'}) {
     %epg_config = (%epg_config, %{$ini->{'EPG'}});
 }
@@ -45,7 +80,7 @@ my $fbDb = DBI->connect("dbi:Firebird:db=".$epg_config{"DB_NAME"}.";ib_charset=U
                         $epg_config{"DB_USER"}, 
                         $epg_config{"DB_PSWD"}, 
                         { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
-my $sel_q = " select s.Dvbs_Id, coalesce(n.Aostrm,0) Aostrm, lower(n.Country) Country ".
+my $sel_q = " select s.Dvbs_Id, coalesce(n.Aostrm,0), lower(n.Country), s.Es_Ip, s.Es_Port, coalesce(n.Descriptors,'') ".
             " from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
 if ($epg_config{"NETWORK_ID"} eq '') {
     $sel_q = $sel_q . " where n.Dvbn_Id in (select first 1 d.Dvbn_Id from Dvb_Network d) "; 
@@ -54,12 +89,23 @@ else {
     $sel_q = $sel_q . " where n.NID = ".$epg_config{"NETWORK_ID"}; 
 }
 my $sth_s = $fbDb->prepare($sel_q);
-$sth_s->execute or die "ERROR: Failed execute SQL!";
+$sth_s->execute or die "ERROR: Failed execute SQL Dvb_Network !";
 my @threads;
-while (my ($dvbs_id, $aostrm, $country) = $sth_s->fetchrow_array()) {
+while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc) = $sth_s->fetchrow_array()) {
     $epg_config{"ACTUAL_OTHER"} = $aostrm; # Передавать ли текущий/следующий поток в одном UDP потоке
     $epg_config{"COUNTRY"} = $country;     # язык по-умолчанию
-    $epg_config{"DVBS_ID"} = $dvbs_id;
+    $epg_config{"DVBS_ID"} = $dvbs_id;     
+    $epg_config{"UDPhost"} = $UDPhost;
+    $epg_config{"UDPport"} = $UDPport;
+    
+    $epg_config{"SHOW_EXT"} = 0; # Передавать расш. описание
+    $epg_config{"SHOW_AGE"} = 0; # Передавать возраст
+    $epg_config{"SHOW_GNR"} = 0; # Передавать жанр
+    
+    if (index($desc, 'ExtendedEventDescriptor')>=0)  { $epg_config{"SHOW_EXT"} = "1"; }
+    if (index($desc, 'ParentalRatingDescriptor')>=0) { $epg_config{"SHOW_AGE"} = "1"; }
+    if (index($desc, 'ContentDescriptor')>=0)        { $epg_config{"SHOW_GNR"} = "1"; }
+    
     push @threads, threads->create(\&RunThread, %epg_config);
     #RunThread(%epg_config); #for debug run without threads
 } 
@@ -73,23 +119,12 @@ foreach my $thread (@threads) {
 sub RunThread {
     my %cfg = @_;
     
-    my $dvbsid = $cfg{"DVBS_ID"};
+    my $dvbsid     = $cfg{"DVBS_ID"};
     my $eitDb      = $cfg{"TMP"}.'eit'.$dvbsid.'.sqlite';
     my $carouselDb = $cfg{"TMP"}.'carousel'.$dvbsid.'.sqlite';
     
     my $tsEpg = DVB::Epg->new( $eitDb ) || die( "Error opening EIT database [$eitDb]: $!");
     my $tsCarousel = DVB::Carousel->new( $carouselDb ) || die( "Error opening carousel database [$carouselDb]: $!");
-    
-    my $tsDb = DBI->connect("dbi:Firebird:db=".$cfg{"DB_NAME"}.";ib_charset=UTF8", 
-                        $cfg{"DB_USER"}, $cfg{"DB_PSWD"}, 
-                        { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
-    
-    my $sel_q = "select s.Es_Ip, s.Es_Port from Dvb_Streams s where s.Dvbs_Id = $dvbsid";
-    my $sth_s = $tsDb->prepare($sel_q);
-    $sth_s->execute or die "ERROR: Failed execute SQL!";
-    my ($UDPhost, $UDPport) = $sth_s->fetchrow_array();
-    
-    InitEitDb($tsDb, %cfg);
     
     my $tsSocket = IO::Socket::Multicast->new(Proto=>'udp') || die "Couldn't open socket";
     
@@ -99,10 +134,40 @@ sub RunThread {
     }
     $tsSocket->mcast_ttl(10);
     $tsSocket->mcast_loopback(0);
-    $tsSocket->mcast_dest($UDPhost.':'.$UDPport);
+    $tsSocket->mcast_dest($cfg{"UDPhost"}.':'.$cfg{"UDPport"});
     
-    ReadEpgData($tsEpg, $tsCarousel, $tsDb, %cfg);
+    my $lastCheckEPG = '';
+    
+    my $TimeToCheck = 0;
     while (1) {
+        # пришло ли время проверять данные в базе A4on.TV
+        if ($TimeToCheck <= 0) {
+            my $tsDb = DBI->connect("dbi:Firebird:db=".$cfg{"DB_NAME"}.";ib_charset=UTF8", 
+                                $cfg{"DB_USER"}, $cfg{"DB_PSWD"}, 
+                                { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
+            # Время в формате 26.02.2015 23:50:00
+            my $attr = {
+                ib_timestampformat => '%d.%m.%Y %H:%M:%S',
+                ib_dateformat => '%d.%m.%Y',
+                ib_timeformat => '%H:%M:%S',
+            };
+            # Прочитаем последнее изменение в БД
+            my $sel_DVBs = "select Coalesce(s.EPG_UPDATED, current_timestamp) from Dvb_Streams s where s.Dvbs_Id = $dvbsid";
+            my $sth_s = $tsDb->prepare($sel_DVBs, $attr);
+            $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Streams !";
+            my ($EPGupdateON) = $sth_s->fetchrow_array();
+            $sth_s->finish();
+            print "$dvbsid EPG last time update |$EPGupdateON| saved time |$lastCheckEPG| \n";
+            # проверим совпадает ли с тем что мы уже проверили
+            if ($lastCheckEPG ne $EPGupdateON) {
+                InitEitDb($tsDb, %cfg);
+                ReadEpgData($tsEpg, $tsCarousel, $tsDb, %cfg);
+                $lastCheckEPG = $EPGupdateON;
+            }
+            
+            $tsDb->disconnect();
+            $TimeToCheck = $cfg{'READ_EPG'};#*60;
+        }
         BuildEPG($tsEpg, $tsCarousel,  %cfg);
         
         if ($cfg{"EXPORT_TS"} eq '1') {
@@ -114,9 +179,12 @@ sub RunThread {
         }
         
         SendUDP($tsCarousel, $tsSocket, %cfg);
+        
+        # Уменьшим счетчик времени при 0 или минусе будем заново формировать БД
+        $TimeToCheck = $TimeToCheck - $cfg{'RELOAD_TIME'};
+        #print "$dvbsid Check time $TimeToCheck \n";
     }
     
-    $tsDb->disconnect();
 }
 
 sub InitEitDb {
@@ -133,8 +201,7 @@ sub InitEitDb {
     
     my $number_of_segments  = $cfg{"DAYS"}*8; #(3days*8)
     
-    my $sel_q = " select
-                    sc.Sid, n.Onid, s.Tsid, n.Nid, sc.Ch_Id, iif(s.Dvbs_Id = $dvbsid, 1, 0) as isactual
+    my $sel_q = " select sc.Sid, n.Onid, s.Tsid, n.Nid, sc.Ch_Id, iif(s.Dvbs_Id = $dvbsid, 1, 0) as isactual
                   from Dvb_Network n
                        inner join Dvb_Streams s on (n.Dvbn_Id = s.Dvbn_Id)
                        inner join Dvb_Stream_Channels sc on (s.Dvbs_Id = sc.Dvbs_Id)";
@@ -147,7 +214,7 @@ sub InitEitDb {
     }
     
     my $sth_s = $tsDb->prepare($sel_q);
-    $sth_s->execute or die "ERROR: Failed execute SQL!";
+    $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Stream_Channels !";
     while ( my ($sid, $onid, $tsid, $nid, $chid, $isactual) = $sth_s->fetchrow_array()) {
         $tsEpg->addEit( 18, $sid, $onid, $tsid, $chid, $number_of_segments, $isactual, '');
     } 
@@ -160,20 +227,19 @@ sub ReadEpgData {
     
     my $dvbsid     = $cfg{"DVBS_ID"};
     
-    
-    #26.02.2015 23:50:00
+    # Время в формате 26.02.2015 23:50:00
     my $attr = {
         ib_timestampformat => '%d.%m.%Y %H:%M:%S',
         ib_dateformat => '%d.%m.%Y',
         ib_timeformat => '%H:%M:%S',
-     };    
+    };
     my $sel_q = "select 
-                   ch_id, date_start, date_stop, title, description, minage, lower(lang)
+                   ch_id, date_start, date_stop, title, description, minage, lower(lang), dvbgenres
                  from Get_Epg($dvbsid, null, null, ".$cfg{"ACTUAL_OTHER"}.")";
     my $sth_s = $tsDb->prepare($sel_q, $attr);
-    $sth_s->execute or die "ERROR: Failed execute SQL!";
+    $sth_s->execute or die "ERROR: Failed execute SQL Get_Epg !";
     
-    while (my ($program, $start, $stop, $title, $synopsis, $minage, $lang) = $sth_s->fetchrow_array()) {
+    while (my ($program, $start, $stop, $title, $synopsis, $minage, $lang, $dvbgenres) = $sth_s->fetchrow_array()) {
         #lang codes http://en.wikipedia.org/wiki/List_of_ISO_639-2_codes
         if (!defined $lang) { 
             $lang = $cfg{"COUNTRY"}
@@ -219,33 +285,40 @@ sub ReadEpgData {
         # 0x10 0x00 0x0E ISO/IEC 8859-14 [35] Celtic A.10
         # 0x10 0x00 0x0F ISO/IEC 8859-15 [36] West European A.11
         
-        if  (($lang eq 'rus')    # Russian
-            || ($lang eq 'bel')  # Belarusian
-            || ($lang eq 'ukr')) # Ukrainian
-        { 
-            $title_ISO    = encode("iso-8859-5", $title); 
-            $synopsis_ISO = encode("iso-8859-5", $synopsis);
-            $lang_prefix  = "\x10\x00\x5"; 
-        } 
-        elsif(($lang eq 'lav')   # Latvian
-            || ($lang eq 'lit')  # Lithuanian
-            || ($lang eq 'est')) # Estonian
-        {
-            $title_ISO    = encode("iso-8859-4", $title); 
-            $synopsis_ISO = encode("iso-8859-4", $synopsis);
-            $lang_prefix  = "\x10\x00\x4"; 
-        } 
-        elsif($lang eq 'pol')    # Polish
-        { 
-            $title_ISO    = encode("iso-8859-2", $title); 
-            $synopsis_ISO = encode("iso-8859-2", $synopsis);
-            $lang_prefix  = "\x10\x00\x2"; 
-        } 
-        else {                   # English German French
-            $title_ISO    = encode("iso-8859-1", $title); 
-            $synopsis_ISO = encode("iso-8859-1", $synopsis);
-            $lang_prefix  = "\x10\x00\x1"; 
-        } 
+        if ($cfg{"TEXT_IN_UTF"} ne '1') {
+            if  (($lang eq 'rus')    # Russian
+                || ($lang eq 'bel')  # Belarusian
+                || ($lang eq 'ukr')) # Ukrainian
+            { 
+                $title_ISO    = encode("iso-8859-5", $title); 
+                $synopsis_ISO = encode("iso-8859-5", $synopsis);
+                $lang_prefix  = "\x10\x00\x5"; 
+            } 
+            elsif(($lang eq 'lav')   # Latvian
+                || ($lang eq 'lit')  # Lithuanian
+                || ($lang eq 'est')) # Estonian
+            {
+                $title_ISO    = encode("iso-8859-4", $title); 
+                $synopsis_ISO = encode("iso-8859-4", $synopsis);
+                $lang_prefix  = "\x10\x00\x4"; 
+            } 
+            elsif($lang eq 'pol')    # Polish
+            { 
+                $title_ISO    = encode("iso-8859-2", $title); 
+                $synopsis_ISO = encode("iso-8859-2", $synopsis);
+                $lang_prefix  = "\x10\x00\x2"; 
+            }
+            else {                   # English German French
+                $title_ISO    = encode("iso-8859-1", $title); 
+                $synopsis_ISO = encode("iso-8859-1", $synopsis);
+                $lang_prefix  = "\x10\x00\x1"; 
+            } 
+        }
+        else {
+            $title_ISO    = $title;
+            $synopsis_ISO = $synopsis;
+            $lang_prefix  = "\x15"; 
+        }
         
         my @descriptors;
         my $short_descriptor;
@@ -256,24 +329,43 @@ sub ReadEpgData {
         $short_descriptor->{text} = "";
         push( @descriptors, $short_descriptor);
         
-        if (defined $synopsis_ISO) {
-            my $extended_descriptor;
-            $extended_descriptor->{descriptor_tag} = 0x4e;    # extended event descriptor
-            $extended_descriptor->{language_code} = $lang;
-            $extended_descriptor->{codepage_prefix} = $lang_prefix;
-            $extended_descriptor->{text} = $synopsis_ISO;
-            push( @descriptors, $extended_descriptor);
+        if ($cfg{"SHOW_EXT"} eq '1') {
+            if (defined $synopsis_ISO) {
+                my $extended_descriptor;
+                $extended_descriptor->{descriptor_tag} = 0x4e;    # extended event descriptor
+                $extended_descriptor->{language_code} = $lang;
+                $extended_descriptor->{codepage_prefix} = $lang_prefix;
+                $extended_descriptor->{text} = $synopsis_ISO;
+                push( @descriptors, $extended_descriptor);
+            }
         }
         
-        if (defined $minage) {
-            my $parental_descriptor;
-            $parental_descriptor->{descriptor_tag} = 0x55;    # parental rating descriptor
-                my $rate;
-                $rate->{country_code} = $lang;
-                $rate->{rating} = ($minage-3); # rating = age limitation - 3
-                push( @{$parental_descriptor->{list}}, $rate);
-            push( @descriptors, $parental_descriptor);
+        if ($cfg{"SHOW_AGE"} eq '1') {
+            if (defined $minage) {
+                my $parental_descriptor;
+                $parental_descriptor->{descriptor_tag} = 0x55;    # parental rating descriptor
+                    my $rate;
+                    $rate->{country_code} = $lang;
+                    $rate->{rating} = ($minage-3); # rating = age limitation - 3
+                    push( @{$parental_descriptor->{list}}, $rate);
+                push( @descriptors, $parental_descriptor);
+            }
         }
+        
+        if ($cfg{"SHOW_GNR"} eq '1') {
+            if (defined $dvbgenres) {
+                my $dvbgenres_descriptor;
+                $dvbgenres_descriptor->{descriptor_tag} = 0x54;    # dvb genre descriptor
+                my @values = split(',', $dvbgenres);
+                    foreach my $val (@values) {
+                    my $genre;
+                    $genre->{dvb} = $val;
+                    push( @{$dvbgenres_descriptor->{list}}, $genre);
+                }
+                push( @descriptors, $dvbgenres_descriptor);
+            }
+        }
+        
         $event->{descriptors} = \@descriptors;
         
         $tsEPG->addEvent( $event);
