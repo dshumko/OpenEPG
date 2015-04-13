@@ -27,12 +27,16 @@ $epg_config{"DB_NAME"} = 'localhost:epg';
 $epg_config{"DB_USER"} = 'SYSDBA';
 $epg_config{"DB_PSWD"} = 'masterkey';
 $epg_config{"BIND_IP"} = '0.0.0.0';
-$epg_config{"DAYS"}    = 7; # На сколько дней формировать EIT
-$epg_config{"TMP"}     = cwd; # Куда сохранять времменые файлы
-$epg_config{"RELOAD_TIME"} = 5; # Через сколько минут перечитывать поток
-$epg_config{"EXPORT_TS"}   = '0'; # Экспортировать TS в файл
-$epg_config{"NETWORK_ID"}  = ''; # NID сети с которой работает генератор
-$epg_config{"READ_EPG"}    = 1; # Через сколько часов будем проверять данные в базе A4on.TV
+$epg_config{"TS_NAME"} = '';        # Будем хранить TSID
+$epg_config{"DAYS"}    = 7;         # На сколько дней формировать EIT
+$epg_config{"TMP"}     = cwd;       # Куда сохранять времменые файлы
+$epg_config{"RELOAD_TIME"} = 5;     # Через сколько минут перечитывать поток
+$epg_config{"EXPORT_TS"}   = '0';   # Экспортировать TS в файл
+$epg_config{"NETWORK_ID"}  = '';    # NID сети с которой работает генератор
+$epg_config{"READ_EPG"}    = 60;    # Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать
+$epg_config{"RUS_PREFIX"}  = "\x01";# Как кодировать язык. согласно EN 300 468, 
+                                    # ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть = \0x01 (Table A.3) , а может быть  = \0x10\0x00\0x5 (Table A.4)
+
 
 # !!! не использовать, не готово !!!
 $epg_config{"TEXT_IN_UTF"} = 0; # Передавать текст событий в UTF8 а не в ISO 
@@ -49,19 +53,25 @@ my $buflen = 3;
 
 read($fh,$buf,$len);
 if (substr($buf, 0, 3) eq substr($bom, 0, 3)) {
-    my $fw = new IO::File "> $ini_file.new" or die "Cannot open $ini_file : $!";
+    my $fw = new IO::File "> $ini_file.new" or die "Cannot open $ini_file.new : $!";
     binmode($fw);
     my $buflen = (stat($fh))[7];
     while (read($fh,$buf,$buflen)) {
         print $fw $buf or die "Write to $ini_file failed: $!";
     }
-    close($fw) or die "Error closing $ini_file : $!";
+    close($fw) or die "Error closing $ini_file.new : $!";
     close($fh) or die "Error closing $ini_file : $!";
     unlink($ini_file);
     rename "$ini_file.new", "$ini_file";
 }
 else {
     close($fh) or die "Error closing $ini_file : $!";
+}
+
+if ($epg_config{"RUS_PREFIX"} ne "\x01") {
+    if ($epg_config{"RUS_PREFIX"} ne "\0x10\0x00\0x5") {
+        $epg_config{"RUS_PREFIX"} = "\x01";
+    }
 }
 
 # Прочитаем EPG.INI  и заменим дефлтные настройки значениями с файла. раздел "EPG" 
@@ -80,7 +90,7 @@ my $fbDb = DBI->connect("dbi:Firebird:db=".$epg_config{"DB_NAME"}.";ib_charset=U
                         $epg_config{"DB_USER"}, 
                         $epg_config{"DB_PSWD"}, 
                         { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
-my $sel_q = " select s.Dvbs_Id, coalesce(n.Aostrm,0), lower(n.Country), s.Es_Ip, s.Es_Port, coalesce(n.Descriptors,'') ".
+my $sel_q = " select s.Dvbs_Id, coalesce(n.Aostrm,0), lower(n.Country), s.Es_Ip, s.Es_Port, coalesce(n.Descriptors,''), coalesce(s.Tsid,s.Dvbs_Id) ".
             " from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
 if ($epg_config{"NETWORK_ID"} eq '') {
     $sel_q = $sel_q . " where n.Dvbn_Id in (select first 1 d.Dvbn_Id from Dvb_Network d) "; 
@@ -91,12 +101,13 @@ else {
 my $sth_s = $fbDb->prepare($sel_q);
 $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Network !";
 my @threads;
-while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc) = $sth_s->fetchrow_array()) {
+while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname) = $sth_s->fetchrow_array()) {
     $epg_config{"ACTUAL_OTHER"} = $aostrm; # Передавать ли текущий/следующий поток в одном UDP потоке
     $epg_config{"COUNTRY"} = $country;     # язык по-умолчанию
     $epg_config{"DVBS_ID"} = $dvbs_id;     
     $epg_config{"UDPhost"} = $UDPhost;
     $epg_config{"UDPport"} = $UDPport;
+    $epg_config{"TS_NAME"} = $tsname;
     
     $epg_config{"SHOW_EXT"} = 0; # Передавать расш. описание
     $epg_config{"SHOW_AGE"} = 0; # Передавать возраст
@@ -157,16 +168,16 @@ sub RunThread {
             $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Streams !";
             my ($EPGupdateON) = $sth_s->fetchrow_array();
             $sth_s->finish();
-            print "$dvbsid EPG last time update |$EPGupdateON| saved time |$lastCheckEPG| \n";
             # проверим совпадает ли с тем что мы уже проверили
             if ($lastCheckEPG ne $EPGupdateON) {
+                print "TSID ".$cfg{"TS_NAME"}." EPG readed time $lastCheckEPG update time $EPGupdateON \n";
                 InitEitDb($tsDb, %cfg);
                 ReadEpgData($tsEpg, $tsCarousel, $tsDb, %cfg);
                 $lastCheckEPG = $EPGupdateON;
             }
             
             $tsDb->disconnect();
-            $TimeToCheck = $cfg{'READ_EPG'};#*60;
+            $TimeToCheck = $cfg{'READ_EPG'};
         }
         BuildEPG($tsEpg, $tsCarousel,  %cfg);
         
@@ -182,7 +193,6 @@ sub RunThread {
         
         # Уменьшим счетчик времени при 0 или минусе будем заново формировать БД
         $TimeToCheck = $TimeToCheck - $cfg{'RELOAD_TIME'};
-        #print "$dvbsid Check time $TimeToCheck \n";
     }
     
 }
@@ -292,7 +302,7 @@ sub ReadEpgData {
             { 
                 $title_ISO    = encode("iso-8859-5", $title); 
                 $synopsis_ISO = encode("iso-8859-5", $synopsis);
-                $lang_prefix  = "\x10\x00\x5"; 
+                $lang_prefix  = $cfg{"RUS_PREFIX"};
             } 
             elsif(($lang eq 'lav')   # Latvian
                 || ($lang eq 'lit')  # Lithuanian
@@ -300,18 +310,18 @@ sub ReadEpgData {
             {
                 $title_ISO    = encode("iso-8859-4", $title); 
                 $synopsis_ISO = encode("iso-8859-4", $synopsis);
-                $lang_prefix  = "\x10\x00\x4"; 
+                $lang_prefix  = "\x10\x00\x4";
             } 
             elsif($lang eq 'pol')    # Polish
             { 
                 $title_ISO    = encode("iso-8859-2", $title); 
                 $synopsis_ISO = encode("iso-8859-2", $synopsis);
-                $lang_prefix  = "\x10\x00\x2"; 
+                $lang_prefix  = "\x10\x00\x2";
             }
             else {                   # English German French
                 $title_ISO    = encode("iso-8859-1", $title); 
                 $synopsis_ISO = encode("iso-8859-1", $synopsis);
-                $lang_prefix  = "\x10\x00\x1"; 
+                $lang_prefix  = "\x10\x00\x1";
             } 
         }
         else {
@@ -383,7 +393,7 @@ sub BuildEPG {
     if( $tsEPG->updateEit( $pid )) {
         # Extract the snippet 
         my $pes = $tsEPG->getEit( $pid, $interval );
-        print $cfg{"DVBS_ID"}." bitrate = ".( length( $pes )*8/$interval/1000 )." kbps\n";
+        printf("TSID %s bitrate %.3f kbps\n", $cfg{"TS_NAME"}, ( length( $pes )*8/$interval/1000 ));
         $tsCarousel->addMts( $pid, \$pes, $interval*1000 );
     }
 }
@@ -399,7 +409,7 @@ sub SendUDP {
         my $meta = $carousel->getMts( 18 );
         
         if( ! defined $meta) {
-            print "No MTS chunk found for playing\n";
+            print "TSID ".$cfg{"TS_NAME"}." No MTS chunk found for playing\n";
             sleep( 1 );
             next;
         }
