@@ -34,8 +34,8 @@ $epg_config{"RELOAD_TIME"} = 5;     # Через сколько минут пе�
 $epg_config{"EXPORT_TS"}   = '0';   # Экспортировать TS в файл
 $epg_config{"NETWORK_ID"}  = '';    # NID сети с которой работает генератор
 $epg_config{"READ_EPG"}    = 60;    # Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать
-$epg_config{"RUS_PREFIX"}  = "\x01";# Как кодировать язык. согласно EN 300 468, 
-                                    # ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть = \0x01 (Table A.3) , а может быть  = \0x10\0x00\0x5 (Table A.4)
+$epg_config{"RUS_PAGE"}    = 1;     # Как кодировать язык. согласно EN 300 468, 
+                                    # ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4)
 
 
 # !!! не использовать, не готово !!!
@@ -68,16 +68,17 @@ else {
     close($fh) or die "Error closing $ini_file : $!";
 }
 
-if ($epg_config{"RUS_PREFIX"} ne "\x01") {
-    if ($epg_config{"RUS_PREFIX"} ne "\0x10\0x00\0x5") {
-        $epg_config{"RUS_PREFIX"} = "\x01";
-    }
-}
-
 # Прочитаем EPG.INI  и заменим дефлтные настройки значениями с файла. раздел "EPG" 
 my $ini = Config::INI::Reader->read_file($ini_file);
 if (exists $ini->{'EPG'}) {
     %epg_config = (%epg_config, %{$ini->{'EPG'}});
+}
+
+if ($epg_config{"RUS_PAGE"} == 2) {
+    $epg_config{"RUS_HEX"} = "\0x10\0x00\0x5";
+}
+else {
+    $epg_config{"RUS_HEX"} = "\x01";
 }
 
 # проверим чтоб дерриктория была со слешем в конце
@@ -302,7 +303,7 @@ sub ReadEpgData {
             { 
                 $title_ISO    = encode("iso-8859-5", $title); 
                 $synopsis_ISO = encode("iso-8859-5", $synopsis);
-                $lang_prefix  = $cfg{"RUS_PREFIX"};
+                $lang_prefix  = $cfg{"RUS_HEX"};
             } 
             elsif(($lang eq 'lav')   # Latvian
                 || ($lang eq 'lit')  # Lithuanian
