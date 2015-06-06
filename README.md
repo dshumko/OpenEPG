@@ -49,6 +49,11 @@ cpan Config::INI::Reader
 cpan IO::Socket::Multicast
 ```
 
+Как альтернатива можно поставить модули через apt-get, например:
+```
+apt-get install libdbd-firebird-perl 
+```
+
 #### Описание параметров INI файла
 
 |Параметр|Значение по умолчанию|Описание|

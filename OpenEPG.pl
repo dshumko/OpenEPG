@@ -34,6 +34,7 @@ $epg_config{"RELOAD_TIME"} = 5;     # Через сколько минут пе�
 $epg_config{"EXPORT_TS"}   = '0';   # Экспортировать TS в файл
 $epg_config{"NETWORK_ID"}  = '';    # NID сети с которой работает генератор
 $epg_config{"READ_EPG"}    = 60;    # Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать
+$epg_config{"DESC_LEN"}    = 500;   # Количество символов в описании
 $epg_config{"RUS_PAGE"}    = 1;     # Как кодировать язык. согласно EN 300 468, 
                                     # ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4)
 
@@ -81,6 +82,11 @@ else {
     $epg_config{"RUS_HEX"} = "\x01";
 }
 
+if ($epg_config{"DESC_LEN"} !~ /^\d+$/) {
+    print "Wrong description length parameter. Set length as 500 \n";    
+    $epg_config{"DESC_LEN"} = 500;
+}
+
 # проверим чтоб дерриктория была со слешем в конце
 if ((substr($epg_config{"TMP"}, -1) ne '/') and (substr($epg_config{"TMP"}, -1) ne '\\')) {
     $epg_config{"TMP"} = $epg_config{"TMP"}."/"; # добавим закрывающий слэш
@@ -91,8 +97,9 @@ my $fbDb = DBI->connect("dbi:Firebird:db=".$epg_config{"DB_NAME"}.";ib_charset=U
                         $epg_config{"DB_USER"}, 
                         $epg_config{"DB_PSWD"}, 
                         { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
-my $sel_q = " select s.Dvbs_Id, coalesce(n.Aostrm,0), lower(n.Country), s.Es_Ip, s.Es_Port, coalesce(n.Descriptors,''), coalesce(s.Tsid,s.Dvbs_Id) ".
-            " from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
+my $sel_q = " select s.Dvbs_Id, coalesce(n.Aostrm,0), lower(n.Country), s.Es_Ip UDPhost, s.Es_Port UDPport, coalesce(n.Descriptors,'') desc, 
+                     coalesce((select list(c.Tsid) from Dvb_Stream_Channels c where c.Dvbs_Id = s.Dvbs_Id), coalesce(s.Tsid,'no TSID')) tsname 
+            from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
 if ($epg_config{"NETWORK_ID"} eq '') {
     $sel_q = $sel_q . " where n.Dvbn_Id in (select first 1 d.Dvbn_Id from Dvb_Network d) "; 
 }
@@ -154,8 +161,7 @@ sub RunThread {
     while (1) {
         # пришло ли время проверять данные в базе A4on.TV
         if ($TimeToCheck <= 0) {
-            my $tsDb = DBI->connect("dbi:Firebird:db=".$cfg{"DB_NAME"}.";ib_charset=UTF8", 
-                                $cfg{"DB_USER"}, $cfg{"DB_PSWD"}, 
+            my $tsDb = DBI->connect("dbi:Firebird:db=".$cfg{"DB_NAME"}.";ib_charset=UTF8", $cfg{"DB_USER"}, $cfg{"DB_PSWD"}, 
                                 { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
             # Время в формате 26.02.2015 23:50:00
             my $attr = {
@@ -180,6 +186,7 @@ sub RunThread {
             $tsDb->disconnect();
             $TimeToCheck = $cfg{'READ_EPG'};
         }
+        
         BuildEPG($tsEpg, $tsCarousel,  %cfg);
         
         if ($cfg{"EXPORT_TS"} eq '1') {
@@ -189,7 +196,6 @@ sub RunThread {
             print( $ts $pes );
             close( $ts );
         }
-        
         SendUDP($tsCarousel, $tsSocket, %cfg);
         
         # Уменьшим счетчик времени при 0 или минусе будем заново формировать БД
@@ -212,16 +218,17 @@ sub InitEitDb {
     
     my $number_of_segments  = $cfg{"DAYS"}*8; #(3days*8)
     
-    my $sel_q = " select sc.Sid, n.Onid, s.Tsid, n.Nid, sc.Ch_Id, iif(s.Dvbs_Id = $dvbsid, 1, 0) as isactual
+    my $sel_q = " select sc.Sid, n.Onid, coalesce(sc.Tsid, s.Tsid) Tsid, n.Nid, sc.Ch_Id, iif(s.Dvbs_Id = $dvbsid, 1, 0) as isactual
                   from Dvb_Network n
                        inner join Dvb_Streams s on (n.Dvbn_Id = s.Dvbn_Id)
-                       inner join Dvb_Stream_Channels sc on (s.Dvbs_Id = sc.Dvbs_Id)";
+                       inner join Dvb_Stream_Channels sc on (s.Dvbs_Id = sc.Dvbs_Id) 
+                  where (not sc.Sid is null) and ";
     # Будем ли передавать данные другого потока
     if ($cfg{"ACTUAL_OTHER"} == 1) {
-        $sel_q = $sel_q." where n.Dvbn_Id in (select a.Dvbn_Id from Dvb_Streams a where a.Dvbs_Id = $dvbsid) ";
+        $sel_q = $sel_q." n.Dvbn_Id in (select a.Dvbn_Id from Dvb_Streams a where a.Dvbs_Id = $dvbsid) ";
     }
     else {
-        $sel_q = $sel_q." where s.Dvbs_Id = $dvbsid ";
+        $sel_q = $sel_q." s.Dvbs_Id = $dvbsid ";
     }
     
     my $sth_s = $tsDb->prepare($sel_q);
@@ -244,9 +251,8 @@ sub ReadEpgData {
         ib_dateformat => '%d.%m.%Y',
         ib_timeformat => '%H:%M:%S',
     };
-    my $sel_q = "select 
-                   ch_id, date_start, date_stop, title, description, minage, lower(lang), dvbgenres
-                 from Get_Epg($dvbsid, null, null, ".$cfg{"ACTUAL_OTHER"}.")";
+    
+    my $sel_q = "select ch_id, date_start, date_stop, title, left(description, ".$cfg{"DESC_LEN"}.") description, minage, lower(lang), dvbgenres from Get_Epg($dvbsid, null, null, ".$cfg{"ACTUAL_OTHER"}.")";
     my $sth_s = $tsDb->prepare($sel_q, $attr);
     $sth_s->execute or die "ERROR: Failed execute SQL Get_Epg !";
     
@@ -394,7 +400,7 @@ sub BuildEPG {
     if( $tsEPG->updateEit( $pid )) {
         # Extract the snippet 
         my $pes = $tsEPG->getEit( $pid, $interval );
-        printf("TSID %s bitrate %.3f kbps\n", $cfg{"TS_NAME"}, ( length( $pes )*8/$interval/1000 ));
+        printf("TSID %s bitrate %.3f kbps\n", $cfg{"TS_NAME"},  ( length( $pes )*8/$interval/1000 ));
         $tsCarousel->addMts( $pid, \$pes, $interval*1000 );
     }
 }
