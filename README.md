@@ -77,3 +77,7 @@ apt-get install libdbd-firebird-perl
     EXPORT_TS   = 0
     NETWORK_ID  = 1
 
+#### Координаты
+
+http://A4on.TV
+twitter: a4on_tv

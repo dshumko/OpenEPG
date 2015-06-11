@@ -98,7 +98,7 @@ my $fbDb = DBI->connect("dbi:Firebird:db=".$epg_config{"DB_NAME"}.";ib_charset=U
                         $epg_config{"DB_PSWD"}, 
                         { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
 my $sel_q = " select s.Dvbs_Id, coalesce(n.Aostrm,0), lower(n.Country), s.Es_Ip UDPhost, s.Es_Port UDPport, coalesce(n.Descriptors,'') desc, 
-                     coalesce((select list(c.Tsid) from Dvb_Stream_Channels c where c.Dvbs_Id = s.Dvbs_Id), coalesce(s.Tsid,'no TSID')) tsname 
+                     coalesce((select list(distinct c.Tsid) from Dvb_Stream_Channels c where c.Dvbs_Id = s.Dvbs_Id), coalesce(s.Tsid,'no TSID')) tsname 
             from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
 if ($epg_config{"NETWORK_ID"} eq '') {
     $sel_q = $sel_q . " where n.Dvbn_Id in (select first 1 d.Dvbn_Id from Dvb_Network d) "; 
