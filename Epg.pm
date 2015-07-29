@@ -638,7 +638,8 @@ sub updateEitSchedule {
     my $num_subtable = int( ( $rule->{maxsegments} - 1 ) / 32 );
 
     # always use this time in queries
-    my $current_time = time();
+    # 43200 it's 12 hour before now in seconds (12*60*60)
+    my $current_time = time() - 43200; 
 
     my $last_midnight = int( $current_time / ( 24 * 60 * 60 ) ) * 24 * 60 * 60;
 
