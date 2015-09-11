@@ -33,6 +33,7 @@ $epg_config{"TMP"}     = cwd;       # Куда сохранять времмен
 $epg_config{"RELOAD_TIME"} = 5;     # Через сколько минут перечитывать поток
 $epg_config{"EXPORT_TS"}   = '0';   # Экспортировать TS в файл
 $epg_config{"NETWORK_ID"}  = '';    # NID сети с которой работает генератор
+$epg_config{"ONID"}  = '';          # ONID сети с которой работает генератор
 $epg_config{"READ_EPG"}    = 60;    # Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать
 $epg_config{"DESC_LEN"}    = 500;   # Количество символов в описании
 $epg_config{"RUS_PAGE"}    = 1;     # Как кодировать язык. согласно EN 300 468, 
@@ -97,15 +98,26 @@ my $fbDb = DBI->connect("dbi:Firebird:db=".$epg_config{"DB_NAME"}.";ib_charset=U
                         $epg_config{"DB_USER"}, 
                         $epg_config{"DB_PSWD"}, 
                         { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
+
+$fbDb->{LongReadLen} = $epg_config{"DESC_LEN"}*2;
+$fbDb->{LongTruncOk} = 1;
+
 my $sel_q = " select s.Dvbs_Id, coalesce(n.Aostrm,0), lower(n.Country), s.Es_Ip UDPhost, s.Es_Port UDPport, coalesce(n.Descriptors,'') desc, 
                      coalesce((select list(distinct c.Tsid) from Dvb_Stream_Channels c where c.Dvbs_Id = s.Dvbs_Id), coalesce(s.Tsid,'no TSID')) tsname 
             from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
+
 if ($epg_config{"NETWORK_ID"} eq '') {
-    $sel_q = $sel_q . " where n.Dvbn_Id in (select first 1 d.Dvbn_Id from Dvb_Network d) "; 
+    if ($epg_config{"ONID"} eq '') {
+        $sel_q = $sel_q . " where n.Dvbn_Id in (select first 1 d.Dvbn_Id from Dvb_Network d) "; 
+    }
+    else {
+        $sel_q = $sel_q . " where n.ONID = ".$epg_config{"ONID"}; 
+    }
 }
 else {
     $sel_q = $sel_q . " where n.NID = ".$epg_config{"NETWORK_ID"}; 
 }
+
 my $sth_s = $fbDb->prepare($sel_q);
 $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Network !";
 my @threads;
@@ -148,8 +160,7 @@ sub RunThread {
     my $tsSocket = IO::Socket::Multicast->new(Proto=>'udp') || die "Couldn't open socket";
     
     if ( $cfg{"BIND_IP"} ne '0.0.0.0') {
-        my $inet_addr = inet_aton($cfg{"BIND_IP"});
-        $tsSocket->mcast_if($inet_addr);
+        $tsSocket->mcast_if($cfg{"BIND_IP"});
     }
     $tsSocket->mcast_ttl(10);
     $tsSocket->mcast_loopback(0);

@@ -227,7 +227,7 @@ sub addEvent {
                 # check step by step if index from 0 on are in use
                 my $num = $dbh->prepare(
                         "SELECT event_id FROM event WHERE "
-					  . "uid = '$event->{uid}' "
+                      . "uid = '$event->{uid}' "
                       . "ORDER BY event_id" );
                 $num->execute();
                 my $lastused = -1;
@@ -638,11 +638,15 @@ sub updateEitSchedule {
     my $num_subtable = int( ( $rule->{maxsegments} - 1 ) / 32 );
 
     # always use this time in queries
-    # 43200 it's 12 hour before now in seconds (12*60*60)
-    my $current_time = time() - 43200; 
-
+    my $current_time = time();
     my $last_midnight = int( $current_time / ( 24 * 60 * 60 ) ) * 24 * 60 * 60;
-
+    
+    # it's magic :) 7200 it's one hour ago in seconds (1*60*60) for shedule show completed program
+    my $current_time_shift = $current_time - 3600;
+    if ($last_midnight == int( $current_time_shift / ( 24 * 60 * 60 ) ) * 24 * 60 * 60) {
+        $current_time = $current_time_shift;
+    }
+    
     # iterate over all subtables
     my $subtable_count = 0;
     while ( $subtable_count <= $num_subtable ) {
