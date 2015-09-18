@@ -17,6 +17,7 @@ use Cwd;
 use threads;
 use IO::Socket::Multicast;
 use IO::File;
+use Digest::CRC qw(crc);
 
 my %epg_config = ();
 
@@ -38,7 +39,7 @@ $epg_config{"READ_EPG"}    = 60;    # Через сколько минут бу�
 $epg_config{"DESC_LEN"}    = 500;   # Количество символов в описании
 $epg_config{"RUS_PAGE"}    = 1;     # Как кодировать язык. согласно EN 300 468, 
                                     # ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4)
-
+$epg_config{"TDT"}    = 0;          # Формировать таблицу TOT и TDT
 
 # !!! не использовать, не готово !!!
 $epg_config{"TEXT_IN_UTF"} = 0; # Передавать текст событий в UTF8 а не в ISO 
@@ -77,7 +78,7 @@ if (exists $ini->{'EPG'}) {
 }
 
 if ($epg_config{"RUS_PAGE"} == 2) {
-    $epg_config{"RUS_HEX"} = "\0x10\0x00\0x5";
+    $epg_config{"RUS_HEX"} = "\0x10\0x00\0x05";
 }
 else {
     $epg_config{"RUS_HEX"} = "\x01";
@@ -424,6 +425,9 @@ sub SendUDP {
     my $start = time();
     
     my $reload_time = ($cfg{'RELOAD_TIME'})*60;
+    
+    my $packet_size=188;
+    
     while( 1 ) {
         # get all data fot the EIT
         my $meta = $carousel->getMts( 18 );
@@ -437,11 +441,11 @@ sub SendUDP {
         # set the variables
         my $interval = $$meta[1];
         my $mts = $$meta[2];
-        my $mtsCount = length( $mts) / 188;
+        my $mtsCount = length( $mts) / $packet_size;
         my $packetCounter = 0;
         
         # correct continuity counter    
-        for ( my $j = 3 ; $j < length( $mts ) ; $j += 188 ) {
+        for ( my $j = 3 ; $j < length( $mts ) ; $j += $packet_size ) {
             substr( $mts, $j, 1, chr( 0b00010000 | ( $continuityCounter & 0x0f ) ) );
             $continuityCounter += 1;
         }
@@ -457,7 +461,7 @@ sub SendUDP {
         }
         
         # correct the count of packets
-        $mtsCount = length( $mts) / 188;
+        $mtsCount = length( $mts) / $packet_size;
         
         # calculate the waiting time between playing chunks of 7 packets in micro seconds
         my $gap = ceil( $interval / $mtsCount * 7 * 1000);
@@ -467,10 +471,67 @@ sub SendUDP {
             my $chunkCount = $mtsCount-$packetCounter;
             $chunkCount = 7 if $chunkCount > 7; 
             
-            $multicast->mcast_send(substr( $mts, $packetCounter * 188, $chunkCount * 188));
+            $multicast->mcast_send(substr( $mts, $packetCounter * $packet_size, $chunkCount * $packet_size));
             $packetCounter += $chunkCount;
+            
             usleep( $gap );
         }
+        
+        if ($cfg{'TDT'} eq '1') { # TOD TDT
+            
+            my $region='RUS';
+            
+            my $time_offset="\x00\x03\x00";                         #сдвиг времени сразу в шестнадцатеричке, это текущий сдвиг на данный момент. в начале первый байт 6 бит код региона, 1 бит резервный, 1 бит + или - сдвига.
+            my $next_offset="\x00\x00";                             #сдвиг который предполагается после даты указанной следующей строкой.
+            my $next_date = "\x00\xED\x00\x00\x00";                 #время следующего сдвига - 06:28:16 28-08-1995,те в прошлом, как считает фиг знает
+            
+            my $tdt_header="\x47\x40\x14\x12\x00\x70\x70\x05";      #начало TDT пакета, сразу забита и длина пакета 5 байт, по идее она всегда такая и будет - 2 байта дата в MJD и 3 байта время как есть.
+            my $tot_header="\x47\x40\x14\x13\x00";
+            my $tot_header_len="\x73\x00\x1a";                      #TOT заголовок длина тоже сразу укзана 1a-26 байт
+            
+            my $tail_packets;
+            for(my $i=0;$i<5;$i++) { $tail_packets .= "\x47\x1f\xff\x10"."\xff" x 184; }    #делаем пачку из 7 нулевых пакетов
+            
+            my ($m, $y, $ut, $s, $hex_time);#, $s, $m, $h, $day, $month, $year);
+            my($sec,$min,$houre,$day,$month,$year) = gmtime(time);
+            $month++;
+            $year += 1900;
+            $ut = ((($sec/60+$min)/60+$houre)/24);
+            if ($month <= 2) {
+            $m = int($month+9);
+            $y = int($year-1);
+            } else {
+            $m = int($month-3);
+            $y = int($year);
+            }
+            my $c = int($y/100);
+            $y = $y-$c*100;
+            my $x1 = int(146097.0*$c/4.0);
+            my $x2 = int(1461.0*$y/4.0);
+            my $x3 = int((153.0*$m+2.0)/5.0);
+            my $jmd=int($x1+$x2+$x3+$day-678882+$ut);
+            
+            $houre=pack("C", ($houre/10) <<4 | ($houre % 10)); #идиотские преобразования, 59 минут в Hex должны выглядеть как 59 а не 3b
+            $min=pack("C", ($min/10)  <<4 | ($min  % 10));
+            $sec=pack("C", ($sec/10)  <<4 | ($sec  % 10));
+            $hex_time=pack('n',$jmd).$houre.$min.$sec;
+            
+            my $tdt_packet= $tdt_header.$hex_time;
+            $tdt_packet.="\xff" x ($packet_size-length($tdt_packet));
+            
+            my $descriptor="\x00\x0f\x58\x0d"; #дескриптора и его длина 13 байт. и длина всего вместе в начале
+            $descriptor.=$region.$time_offset.$next_date.$next_offset;
+            
+            my $tot_packet=$tot_header.$tot_header_len.$hex_time.$descriptor;
+            
+            $tot_packet.=pack('N',crc( $tot_header_len.$hex_time.$descriptor, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); #добавили mpeg2 crc
+            $tot_packet.="\xff" x ($packet_size-length($tot_packet));
+            
+            $multicast->mcast_send( $tot_packet.$tdt_packet.$tail_packets); #шлем блок или 7ми пакетов 2 с данными и 5 нулевых.
+            
+            usleep( $gap );
+        }
+        
         my $end = time();
         if (($end - $start) > $reload_time) {
             last;
