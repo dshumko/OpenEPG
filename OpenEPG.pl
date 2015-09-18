@@ -314,6 +314,8 @@ sub ReadEpgData {
         # 0x10 0x00 0x0F ISO/IEC 8859-15 [36] West European A.11
         
         if ($cfg{"TEXT_IN_UTF"} ne '1') {
+            $title = CorrectISO($title);
+            $synopsis = CorrectISO($synopsis);
             if  (($lang eq 'rus')    # Russian
                 || ($lang eq 'bel')  # Belarusian
                 || ($lang eq 'ukr')) # Ukrainian
@@ -474,6 +476,25 @@ sub SendUDP {
             last;
         }
     }
+}
+
+sub CorrectISO {
+    my ($string) = @_;
+    $string = ReplaceChar($string,'«', '"');
+    $string = ReplaceChar($string,'»', '"');
+    $string = ReplaceChar($string,'—', '-');
+    return($string);
+}
+
+sub ReplaceChar {
+    my ($string, $find, $replace) = @_;
+    my $pos = index($string, $find);
+    my $length = 0;
+    while ( $pos > -1 ) {
+        substr( $string, $pos, 1, $replace );
+        $pos = index( $string, $find, $pos + 1);
+    }
+    return($string);
 }
 
 # end of file
