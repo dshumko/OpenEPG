@@ -104,7 +104,7 @@ my $fbDb = DBI->connect("dbi:Firebird:db=".$epg_config{"DB_NAME"}.";ib_charset=U
 # $fbDb->{LongReadLen} = $epg_config{"DESC_LEN"}*2;
 # $fbDb->{LongTruncOk} = 1;
 
-my $sel_q = " select s.Dvbs_Id, coalesce(n.Aostrm,0), lower(n.Country), s.Es_Ip UDPhost, s.Es_Port UDPport, coalesce(n.Descriptors,'') desc, 
+my $sel_q = " select s.Dvbs_Id, coalesce(s.Aostrm, n.Aostrm, 0), lower(n.Country), s.Es_Ip UDPhost, s.Es_Port UDPport, coalesce(n.Descriptors,'') desc, 
                      coalesce((select list(distinct c.Tsid) from Dvb_Stream_Channels c where c.Dvbs_Id = s.Dvbs_Id), coalesce(s.Tsid,'no TSID')) tsname, coalesce(n.Pids, '') pids
             from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
 
@@ -327,7 +327,6 @@ sub ReadEpgData {
                    ($lang eq 'rus') # Russian
                 || ($lang eq 'bel') # Belarusian
                 || ($lang eq 'ukr') # Ukrainian
-                || ($lang eq 'srp') # Serbian
                 || ($lang eq 'bul') # Bulgarian
                 )
             { 
@@ -345,8 +344,9 @@ sub ReadEpgData {
                 $synopsis_ISO = encode("iso-8859-4", $synopsis);
                 $lang_prefix  = "\x10\x00\x4";
             } 
-            elsif(($lang eq 'pol')   # Polish
-                #|| ($lang eq 'srp') # Serbian
+            elsif(
+                   ($lang eq 'pol') # Polish
+                || ($lang eq 'srp') # Serbian
                 )
             { 
                 $title_ISO    = encode("iso-8859-2", $title); 
