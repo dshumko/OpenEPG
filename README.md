@@ -81,3 +81,7 @@ apt-get install libdbd-firebird-perl
 
 http://A4on.TV  
 twitter: a4on_tv
+
+## License
+
+GPL v2, see [LICENSE](LICENSE).
