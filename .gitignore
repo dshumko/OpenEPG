@@ -3,3 +3,4 @@
 *.bat
 *.stackdump
 OpenEPG.exe_
+.idea/

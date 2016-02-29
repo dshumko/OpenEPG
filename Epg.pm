@@ -56,6 +56,7 @@ use Storable qw(freeze thaw);
 use Carp;
 use Exporter;
 use POSIX qw(ceil);
+use Encode qw(decode encode);
 
 use vars qw($VERSION @ISA @EXPORT);
 
@@ -1355,7 +1356,12 @@ Return converted string.
 sub _getByteString {
     my $string = shift;
     return "" if ! $string;
-    return pack( "C*", unpack( "U*", $string ) );
+    if ( utf8::is_utf8($string) ) {
+        return pack( "C*", unpack( "U*", Encode::encode("utf8", $string) ) );
+    }
+    else {
+        return pack( "C*", unpack( "U*", $string ) );
+    }
 }
 
 =head3 _getExtendedEventDescriptorBin( $descriptor)
