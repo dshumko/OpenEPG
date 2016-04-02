@@ -56,7 +56,7 @@ use Storable qw(freeze thaw);
 use Carp;
 use Exporter;
 use POSIX qw(ceil);
-use Encode qw(decode encode);
+use Encode;
 
 use vars qw($VERSION @ISA @EXPORT);
 
@@ -1277,7 +1277,7 @@ sub _getDescriptorBin {
         # short_event_descriptor
         my $descriptor_tag = 0x4d;
         my $descriptor_length;
-        my $language_code   = _getByteString( $descriptor->{language_code} // 'slv');
+        my $language_code   = _getByteString( $descriptor->{language_code} // 'rus');
         my $codepage_prefix = _getByteString( $descriptor->{codepage_prefix});
         my $raw_event_name  = $descriptor->{event_name} // '';
         my $raw_text        = $descriptor->{text} // '';
@@ -1303,16 +1303,20 @@ sub _getDescriptorBin {
 
     }
     elsif ( $descriptor->{descriptor_tag} == 0x55 ) {
-
+        
         # parental_rating_descriptor
         my $descriptor_tag = 0x55;
         my $descriptor_length;
 
         my $substruct = '';
         foreach ( @{ $descriptor->{list} } ) {
-            my $country_code = _getByteString( $_->{country_code} // 'SVN');
+            my $country_code = _getByteString( $_->{country_code} // 'RUS');
             my $rating       = $_->{rating} // 0;
-            $substruct .= pack( "a3C", $country_code, $rating );
+            if (defined $rating) {
+                if ($rating > 0 ) {
+                    $substruct .= pack( "a3C", $country_code, $rating );
+                }
+            }
         }
         $descriptor_length = length($substruct);
         $struct = pack( "CCa*", $descriptor_tag, $descriptor_length, $substruct );
@@ -1326,7 +1330,9 @@ sub _getDescriptorBin {
         my $substruct = '';
         foreach ( @{ $descriptor->{list} } ) {
             my $genre       = $_->{dvb};
-            $substruct .= pack( "CC", $genre, 0x0 );
+            if (defined $genre) {
+                $substruct .= pack( "CC", $genre, 0x0 );
+            }
         }
         $descriptor_length = length($substruct);
         $struct = pack( "CCa*", $descriptor_tag, $descriptor_length, $substruct );
@@ -1356,12 +1362,12 @@ Return converted string.
 sub _getByteString {
     my $string = shift;
     return "" if ! $string;
+
     if ( utf8::is_utf8($string) ) {
-        return pack( "C*", unpack( "U*", Encode::encode("utf8", $string) ) );
+        $string = Encode::encode("utf8", $string);
     }
-    else {
-        return pack( "C*", unpack( "U*", $string ) );
-    }
+
+    return pack( "C*", unpack( "U*", $string ) );
 }
 
 =head3 _getExtendedEventDescriptorBin( $descriptor)
@@ -1394,7 +1400,7 @@ sub _getExtendedEventDescriptorBin {
     my $last_descriptor_number = int( $full_text_length / $maxTextLength );
 
     my $descriptor_tag         = 0x4e;
-    my $language_code          = _getByteString( $descriptor->{language_code} // 'slv');
+    my $language_code          = _getByteString( $descriptor->{language_code} // 'rus');
     my $codepage_prefix        = _getByteString( $descriptor->{codepage_prefix});
     my $codepage_prefix_length = length($codepage_prefix);
     my $descriptor_length;

@@ -39,12 +39,10 @@ $epg_config{"READ_EPG"} = 60;    # Через сколько минут буде
 $epg_config{"DESC_LEN"} = 500;   # Количество символов в описании
 $epg_config{"RUS_PAGE"} = 1;     # Как кодировать язык. согласно EN 300 468,
 # ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4)
-$epg_config{"TEXT_IN_UTF"} = 0; # Передавать текст событий в UTF8 а не в ISO 
-
+$epg_config{"TEXT_IN_UTF"} = 0;  # Передавать текст событий в UTF8 а не в ISO 
+$epg_config{"LONGREADLEN"} = 0;  # Если возникает ошибка LongReadLen, снимите комментарий. 1000 можно уменьшить. 
 $epg_config{"TOT"} = 0;          # Формировать таблицу TOT и TDT
 $epg_config{"TDT"} = 0;          # Формировать таблицу TOT и TDT
-
-
 
 # Проверим, если ini файл с сигнатурой BOM, то удалим ее
 my $fh = new IO::File "< $ini_file" or die "Cannot open $ini_file : $!";
@@ -101,6 +99,10 @@ my $fbDb = DBI->connect("dbi:Firebird:db=".$epg_config{"DB_NAME"}.";ib_charset=U
     $epg_config{"DB_PSWD"},
     { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
 
+if ($epg_config{"LONGREADLEN"} > 0) {
+    $fbDb->{LongReadLen}=$epg_config{"LONGREADLEN"};
+}
+
 # $fbDb->{LongReadLen} = $epg_config{"DESC_LEN"}*2;
 # $fbDb->{LongTruncOk} = 1;
 
@@ -130,7 +132,7 @@ while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot
     $epg_config{"UDPhost"} = $UDPhost;
     $epg_config{"UDPport"} = $UDPport;
     $epg_config{"TS_NAME"} = $tsname;
-    $epg_config{"TOT"} = 0;         # Формировать таблицу TOT и TDT
+    $epg_config{"TOT"} = 0;      # Формировать таблицу TOT и TDT
 
     $epg_config{"SHOW_EXT"} = 0; # Передавать расш. описание
     $epg_config{"SHOW_AGE"} = 0; # Передавать возраст
@@ -182,6 +184,10 @@ sub RunThread {
             my $tsDb = DBI->connect("dbi:Firebird:db=".$cfg{"DB_NAME"}.";ib_charset=UTF8", $cfg{"DB_USER"},
                 $cfg{"DB_PSWD"},
                 { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
+                
+            if ($cfg{"LONGREADLEN"} > 0) {
+                $tsDb->{LongReadLen}=$epg_config{"LONGREADLEN"};
+            }
             # Время в формате 26.02.2015 23:50:00
             my $attr = {
                 ib_timestampformat => '%d.%m.%Y %H:%M:%S',
@@ -391,7 +397,7 @@ sub ReadEpgData {
         push( @descriptors, $short_descriptor);
         
         if ($cfg{"SHOW_EXT"} eq '1') {
-            if (defined $synopsis_ISO) {
+            if (defined $synopsis_ISO){
                 my $extended_descriptor;
                 $extended_descriptor->{descriptor_tag} = 0x4e;    # extended event descriptor
                 $extended_descriptor->{language_code} = $lang;
@@ -403,13 +409,15 @@ sub ReadEpgData {
 
         if ($cfg{"SHOW_AGE"} eq '1') {
             if (defined $minage) {
-                my $parental_descriptor;
-                $parental_descriptor->{descriptor_tag} = 0x55;    # parental rating descriptor
-                my $rate;
-                $rate->{country_code} = $lang;
-                $rate->{rating} = ($minage - 3); # rating = age limitation - 3
-                push( @{$parental_descriptor->{list}}, $rate);
-                push( @descriptors, $parental_descriptor);
+                if ($minage >= 3) {
+                    my $parental_descriptor;
+                    $parental_descriptor->{descriptor_tag} = 0x55;    # parental rating descriptor
+                    my $rate;
+                    $rate->{country_code} = $lang;
+                    $rate->{rating} = $minage; # rating = age limitation - 3
+                    push( @{$parental_descriptor->{list}}, $rate);
+                    push( @descriptors, $parental_descriptor);
+                }
             }
         }
 
