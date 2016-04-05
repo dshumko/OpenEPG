@@ -278,7 +278,8 @@ sub ReadEpgData {
         ib_timeformat      => '%H:%M:%S',
     };
 
-    my $sel_q = "select ch_id, date_start, date_stop, title, left(description, ".$cfg{"DESC_LEN"}.") description, minage, lower(lang), dvbgenres from Get_Epg($dvbsid, null, null, ".$cfg{"ACTUAL_OTHER"}.")";
+    my $sel_q = "select ch_id, date_start, date_stop, title, left(description, ".$cfg{"DESC_LEN"}.") description, minage, lower(lang), dvbgenres 
+                   from Get_Epg($dvbsid, current_date, dateadd(day, ".$cfg{"DAYS"}.", current_date), ".$cfg{"ACTUAL_OTHER"}.")";
     my $sth_s = $tsDb->prepare($sel_q, $attr);
     $sth_s->execute or die "ERROR: Failed execute SQL Get_Epg !";
 
