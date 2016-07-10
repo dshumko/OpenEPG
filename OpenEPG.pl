@@ -18,11 +18,14 @@ use threads;
 use IO::Socket::Multicast;
 use IO::File;
 use Digest::CRC qw(crc);
+use FindBin qw($Bin);
+
+$| = 1; # добавляет возможность перенаправлять вывод в файл. пример > openepg.log
 
 my %epg_config = ();
 
 #Ищем OpenEPG.ini файл в каталоге со скриптом
-my $ini_file = cwd.'/OpenEPG.ini';
+my $ini_file = $Bin.'/OpenEPG.ini';
 
 $epg_config{"DB_NAME"} = 'localhost:epg';
 $epg_config{"DB_USER"} = 'SYSDBA';
