@@ -6,11 +6,11 @@ use Getopt::Std;
 use DVB::Epg;
 use DVB::Carousel;
 use Carp;
-use Time::Local;
 use DBD::Firebird;
 use Encode;
 use utf8;
 use POSIX qw(ceil);
+use POSIX qw(strftime);
 use Time::HiRes qw(usleep time);
 use Config::INI::Reader;
 use Cwd;
@@ -19,6 +19,11 @@ use IO::Socket::Multicast;
 use IO::File;
 use Digest::CRC qw(crc);
 use FindBin qw($Bin);
+use Time::Local;
+use Time::gmtime;
+use Digest::CRC qw(crc);
+
+#use Data::HexDump;
 
 $| = 1; # добавляет возможность перенаправлять вывод в файл. пример > openepg.log
 
@@ -31,21 +36,19 @@ $epg_config{"DB_NAME"} = 'localhost:epg';
 $epg_config{"DB_USER"} = 'SYSDBA';
 $epg_config{"DB_PSWD"} = 'masterkey';
 $epg_config{"BIND_IP"} = '0.0.0.0';
-$epg_config{"TS_NAME"} = '';        # Будем хранить TSID
+$epg_config{"TS_NAME"} = '';     # Будем хранить TSID
 $epg_config{"DAYS"} = 7;         # На сколько дней формировать EIT
-$epg_config{"TMP"} = cwd;       # Куда сохранять времменые файлы
-$epg_config{"RELOAD_TIME"} = 5;     # Через сколько минут перечитывать поток
-$epg_config{"EXPORT_TS"} = '0';   # Экспортировать TS в файл
-$epg_config{"NETWORK_ID"} = '';    # NID сети с которой работает генератор
-$epg_config{"ONID"} = '';          # ONID сети с которой работает генератор
+$epg_config{"TMP"} = cwd;        # Куда сохранять времменые файлы
+$epg_config{"RELOAD_TIME"} = 5;  # Через сколько минут перечитывать поток
+$epg_config{"EXPORT_TS"} = '0';  # Экспортировать TS в файл
+$epg_config{"NETWORK_ID"} = '';  # NID сети с которой работает генератор
+$epg_config{"ONID"} = '';        # ONID сети с которой работает генератор
 $epg_config{"READ_EPG"} = 60;    # Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать
 $epg_config{"DESC_LEN"} = 500;   # Количество символов в описании
-$epg_config{"RUS_PAGE"} = 1;     # Как кодировать язык. согласно EN 300 468,
-# ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4)
+$epg_config{"RUS_PAGE"} = 1;     # Как кодировать язык. согласно EN 300 468, ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4)
 $epg_config{"TEXT_IN_UTF"} = 0;  # Передавать текст событий в UTF8 а не в ISO 
 $epg_config{"LONGREADLEN"} = 0;  # Если возникает ошибка LongReadLen, снимите комментарий. 1000 можно уменьшить. 
-$epg_config{"TOT"} = 0;          # Формировать таблицу TOT и TDT
-$epg_config{"TDT"} = 0;          # Формировать таблицу TOT и TDT
+$epg_config{"TOT_TDT"} = 0;      # Формировать таблицу TOT и TDT
 
 # Проверим, если ini файл с сигнатурой BOM, то удалим ее
 my $fh = new IO::File "< $ini_file" or die "Cannot open $ini_file : $!";
@@ -110,8 +113,9 @@ if ($epg_config{"LONGREADLEN"} > 0) {
 # $fbDb->{LongTruncOk} = 1;
 
 my $sel_q = "select s.Dvbs_Id, coalesce(s.Aostrm, n.Aostrm, 0), lower(n.Country), s.Es_Ip UDPhost, s.Es_Port UDPport, coalesce(n.Descriptors,'') desc,
-    coalesce((select list(distinct c.Tsid) from Dvb_Stream_Channels c where c.Dvbs_Id = s.Dvbs_Id), coalesce(s.Tsid,'no TSID')) tsname, coalesce(n.Pids, '') pids
-    from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
+    coalesce((select list(distinct c.Tsid) from Dvb_Stream_Channels c where c.Dvbs_Id = s.Dvbs_Id), 
+    coalesce(s.Tsid,'no TSID')) tsname, coalesce(n.Pids, '') pids, coalesce(n.tz, 3) tz, coalesce(n.COUNTRY, 'RUS') country_code
+from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
 
 if ($epg_config{"NETWORK_ID"} eq '') {
     if ($epg_config{"ONID"} eq '') {
@@ -128,26 +132,35 @@ else {
 my $sth_s = $fbDb->prepare($sel_q);
 $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Network !";
 my @threads;
-while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot) = $sth_s->fetchrow_array()) {
+while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot, $tz, $country_code) = $sth_s->fetchrow_array()) {
     $epg_config{"ACTUAL_OTHER"} = $aostrm; # Передавать ли текущий/следующий поток в одном UDP потоке
     $epg_config{"COUNTRY"} = $country;     # язык по-умолчанию
     $epg_config{"DVBS_ID"} = $dvbs_id;
     $epg_config{"UDPhost"} = $UDPhost;
     $epg_config{"UDPport"} = $UDPport;
     $epg_config{"TS_NAME"} = $tsname;
-    $epg_config{"TOT"} = 0;      # Формировать таблицу TOT и TDT
 
+    $epg_config{"TOT_TDT"}  = 0; # Формировать таблицу TOT и TDT
     $epg_config{"SHOW_EXT"} = 0; # Передавать расш. описание
     $epg_config{"SHOW_AGE"} = 0; # Передавать возраст
     $epg_config{"SHOW_GNR"} = 0; # Передавать жанр
 
-    if (index($desc, 'ExtendedEventDescriptor') >= 0) { $epg_config{"SHOW_EXT"} = "1"; }
+    if (index($desc, 'ExtendedEventDescriptor') >= 0)  { $epg_config{"SHOW_EXT"} = "1"; }
     if (index($desc, 'ParentalRatingDescriptor') >= 0) { $epg_config{"SHOW_AGE"} = "1"; }
-    if (index($desc, 'ContentDescriptor') >= 0) { $epg_config{"SHOW_GNR"} = "1"; }
+    if (index($desc, 'ContentDescriptor') >= 0)        { $epg_config{"SHOW_GNR"} = "1"; }
     
-    #if (index($tot,  'TDT')>=0)                      { $epg_config{"TOT"}      = "1"; }
-    #if (index($tot,  'TOT')>=0)                      { $epg_config{"TOT"}      = "1"; }
-
+    if (index($tot,  'TDT')>=0)                        { $epg_config{"TOT_TDT"}  = "1"; }
+    if (index($tot,  'TOT')>=0)                        { $epg_config{"TOT_TDT"}  = "1"; }
+    
+    if ($epg_config{"TOT_TDT"}  eq "1") {                             # сформируем таблицу TOT для дальнейшего использования, она для всех одинакова
+        $epg_config{"TOT"} = "\x00\x0f\x58\x0d".                      # TOT дескриптора и его длина 13 байт. и длина всего вместе в начале
+                             $country_code;                           # country_code
+        if ($tz > 0) { $epg_config{"TOT"}.= "\x00".chr($tz)."\x00"; } # сдвиг времени сразу, это текущий сдвиг на данный момент. в начале первый байт 6 бит код региона, 1 бит резервный, 1 бит + или - сдвига.
+        else { $epg_config{"TOT"}.= "\x01".chr(-1*$tz)."\x00"; }      # если TZ отрицательная установим бит негатива
+        $epg_config{"TOT"} .= "\x00\xED\x00\x00\x00".                 # время следующего сдвига - 06:28:16 28-08-1995,те в прошлом
+                              "\x00\x00";                             # сдвиг который предполагается после даты указанной следующей строкой.
+    }
+    
     push @threads, threads->create(\&RunThread, %epg_config);
     #RunThread(%epg_config); #for debug run without threads
 }
@@ -469,15 +482,11 @@ sub SendUDP {
     my $reload_time = ($cfg{'RELOAD_TIME'}) * 60;
 
     my $packet_size = 188;
-    my $region = 'RUS';
-    my $time_offset = "\x00\x03\x00";                         #сдвиг времени сразу в шестнадцатеричке, это текущий сдвиг на данный момент. в начале первый байт 6 бит код региона, 1 бит резервный, 1 бит + или - сдвига.
-    my $next_offset = "\x00\x00";                             #сдвиг который предполагается после даты указанной следующей строкой.
-    my $next_date = "\x00\xED\x00\x00\x00";                 #время следующего сдвига - 06:28:16 28-08-1995,те в прошлом, как считает фиг знает
-    my $tdt_header = "\x47\x40\x14\x12\x00\x70\x70\x05";      #начало TDT пакета, сразу забита и длина пакета 5 байт, по идее она всегда такая и будет - 2 байта дата в MJD и 3 байта время как есть.
-    my $tot_header = "\x47\x40\x14\x13\x00";
-    my $tot_header_len = "\x73\x00\x1a";                      #TOT заголовок длина тоже сразу укзана 1a = 26 байт
+
+    my $TDTcontinuityCounter = 0;
     my $tail_packets;
-    for (my $i = 0; $i < 5; $i++) { $tail_packets .= "\x47\x1f\xff\x10"."\xff" x ($packet_size - 1); }    #делаем пачку из 7 нулевых пакетов
+    for(my $i=0;$i<5;$i++) { $tail_packets .= "\x47\x1f\xff\x10"."\xff" x 184; }  #делаем пачку из 7 нулевых пакетов 
+
     while( 1 ) {
         # get all data for the EIT
         my $meta = $carousel->getMts( 18 );
@@ -524,39 +533,46 @@ sub SendUDP {
             $multicast->mcast_send(substr( $mts, $packetCounter * $packet_size, $chunkCount * $packet_size));
             $packetCounter += $chunkCount;
 
+            if ($cfg{'TOT_TDT'} eq '1') {
+                # TOD TDT
+                my $epoch = time; #берем текущее время тут
+                
+                my $tm = gmtime($epoch);
+                #получаем дату по модифицированному юлианскому календарю.
+                my $mon = $tm->mon();
+                my $year = $tm->year();
+                my $mday = $tm->mday();
+                ++$mon;
+                my $l = $mon == 1 || $mon == 2 ? 1 : 0;
+                my $jmd = 14956 + $mday + int( ( $year - $l ) * 365.25 ) + int( ( $mon + 1 + $l * 12 ) * 30.6001 );
+
+                my $h=pack("C", ($tm->hour()/10) <<4 | ($tm->hour() % 10)); # 59 минут в Hex должны выглядеть как 59 а не 3b
+                my $m=pack("C", ($tm->min()/10)  <<4 | ($tm->min()  % 10));
+                my $s=pack("C", ($tm->sec()/10)  <<4 | ($tm->sec()  % 10));
+
+                my $hex_time=pack('n',$jmd).$h.$m.$s;
+
+                my $tot_header_len = "\x73\x00\x1a";                # TOT длина заголовока тоже сразу укзана 1a = 26 байт
+                my $tot_packet= "\x47\x40\x14".                     # TOT заголовок
+                                chr($TDTcontinuityCounter)."\x00".  # TOT continuity
+                                $tot_header_len.                    # 
+                                $hex_time.$cfg{'TOT'};              # TOT description
+                $tot_packet.=pack('N',crc( $tot_header_len.$hex_time.$cfg{'TOT'}, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); #добавили mpeg2 crc
+                $tot_packet.="\xff" x ($packet_size-length($tot_packet));
+                $TDTcontinuityCounter++;
+
+                my $tdt_packet = "\x47\x40\x14".                    # TDT заголовок
+                                 chr($TDTcontinuityCounter)."\x00". # TDT continuity
+                                 "\x70\x70\x05".                    # TDT сразу забита и длина пакета 5 байт, по идее она всегда такая и будет
+                                 $hex_time;                         # TDT 2 байта дата в MJD и 3 байта время как есть.
+                $tdt_packet.="\xff" x ($packet_size-length($tdt_packet));
+                $TDTcontinuityCounter++;
+                if ($TDTcontinuityCounter > 15 ) {$TDTcontinuityCounter = 0; }
+
+                $multicast->mcast_send( $tot_packet.$tdt_packet.$tail_packets); #шлем блок или 7ми пакетов 2 с данными и 5 нулевых.
+            }
             usleep( $gap );
         }
-
-        if ($cfg{'TOT'} eq '1') {
-            # TOD TDT
-            my $epoch = time; #берем текущее время тут
-            my $jmd = int(_epoch2mjd($epoch)); #получаем дату по модифицированному юлианскому календарю.
-
-            my ($tm_sec, $tm_min, $tm_hou) = gmtime($epoch);
-
-            my $h = pack("C",
-                ($tm_hou / 10) << 4 | ($tm_hou % 10)); #идиотские преобразования, 59 минут в Hex должны выглядеть как 59 а не 3b
-            my $m = pack("C", ($tm_min / 10) << 4 | ($tm_min % 10));
-            my $s = pack("C", ($tm_sec / 10) << 4 | ($tm_sec % 10));
-            my $hex_time = pack('n', $jmd).$h.$m.$s;
-
-            my $tdt_packet = $tdt_header.$hex_time;
-            $tdt_packet .= "\xff" x ($packet_size - length($tdt_packet));
-
-            my $descriptor = "\x00\x0f\x58\x0d"; #дескриптора и его длина 13 байт. и длина всего вместе в начале
-            $descriptor .= $region.$time_offset.$next_date.$next_offset;
-
-            my $tot_packet = $tot_header.$tot_header_len.$hex_time.$descriptor;
-
-            $tot_packet .= pack('N',
-                crc( $tot_header_len.$hex_time.$descriptor, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0,
-                    0)); #добавили mpeg2 crc
-            $tot_packet .= "\xff" x ($packet_size - length($tot_packet));
-
-            $multicast->mcast_send( $tot_packet.$tdt_packet.$tail_packets); #шлем блок или 7ми пакетов 2 с данными и 5 нулевых.
-
-        }
-
         my $end = time();
         if (($end - $start) > $reload_time) {
             last;
