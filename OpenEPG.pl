@@ -11,6 +11,7 @@ use Encode;
 use utf8;
 use POSIX qw(ceil);
 use POSIX qw(strftime);
+use POSIX qw(floor);
 use Time::HiRes qw(usleep time);
 use Config::INI::Reader;
 use Cwd;
@@ -112,9 +113,9 @@ if ($epg_config{"LONGREADLEN"} > 0) {
 # $fbDb->{LongReadLen} = $epg_config{"DESC_LEN"}*2;
 # $fbDb->{LongTruncOk} = 1;
 
-my $sel_q = "select s.Dvbs_Id, coalesce(s.Aostrm, n.Aostrm, 0), lower(n.Country), s.Es_Ip UDPhost, s.Es_Port UDPport, coalesce(n.Descriptors,'') desc,
+my $sel_q = "select s.Dvbs_Id, coalesce(s.Aostrm, 0), lower(n.Country), s.Es_Ip UDPhost, s.Es_Port UDPport, coalesce(n.Descriptors,'') desc,
     coalesce((select list(distinct c.Tsid) from Dvb_Stream_Channels c where c.Dvbs_Id = s.Dvbs_Id), 
-    coalesce(s.Tsid,'no TSID')) tsname, coalesce(n.Pids, '') pids, coalesce(n.tz, 3) tz, coalesce(n.COUNTRY, 'RUS') country_code
+    coalesce(s.Tsid,'no TSID')) tsname, coalesce(n.Pids, '') pids, coalesce(n.timeoffset, 180) tz, coalesce(n.COUNTRY, 'RUS') country_code
 from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
 
 if ($epg_config{"NETWORK_ID"} eq '') {
@@ -153,10 +154,25 @@ while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot
     if (index($tot,  'TOT')>=0)                        { $epg_config{"TOT_TDT"}  = "1"; }
     
     if ($epg_config{"TOT_TDT"}  eq "1") {                             # сформируем таблицу TOT для дальнейшего использования, она для всех одинакова
+        my $sgn = 1;
+        if ($tz < 0) {$sgn = -1;}
+        $tz = $sgn * $tz;
+        my $toh = floor( $tz  / 60 );  # Часы
+        my $thh = floor( $toh / 10 );  # десятки часов (12 - 1)
+        my $thl = $toh % 10 ;          # единицы часов (12 - 2)
+
+        my $tom = $tz % 60;            # минуты
+        my $tmh = floor( $tom / 10 );  # десятки минут (45 - 4)
+        my $tml = $tom % 10 ;          # единицы минут (45 - 5)
+
         $epg_config{"TOT"} = "\x00\x0f\x58\x0d".                      # TOT дескриптора и его длина 13 байт. и длина всего вместе в начале
                              $country_code;                           # country_code
-        if ($tz > 0) { $epg_config{"TOT"}.= "\x00".chr($tz)."\x00"; } # сдвиг времени сразу, это текущий сдвиг на данный момент. в начале первый байт 6 бит код региона, 1 бит резервный, 1 бит + или - сдвига.
-        else { $epg_config{"TOT"}.= "\x01".chr(-1*$tz)."\x00"; }      # если TZ отрицательная установим бит негатива
+
+        if ($sgn > 0) { $epg_config{"TOT"}.= "\x00"; }                # часов пояс + к UTC в начале первый байт 6 бит код региона, 1 бит резервный, 1 бит + или - сдвига.
+        else { $epg_config{"TOT"}.= "\x01"; }                         # часов пояс - к UTC
+
+        $epg_config{"TOT"}.= chr(($thh << 4) + $thl).chr(($tmh << 4) + $tml); # сдвиг времени сразу, это текущий сдвиг на данный момент. Сдвиг 3 часа 30 минут Должно передаваться как  0330 
+
         $epg_config{"TOT"} .= "\x00\xED\x00\x00\x00".                 # время следующего сдвига - 06:28:16 28-08-1995,те в прошлом
                               "\x00\x00";                             # сдвиг который предполагается после даты указанной следующей строкой.
     }
