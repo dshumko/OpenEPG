@@ -13,6 +13,7 @@ use POSIX qw(ceil);
 use POSIX qw(strftime);
 use POSIX qw(floor);
 use Time::HiRes qw(usleep time);
+use Time::HiRes qw(gettimeofday);
 use Config::INI::Reader;
 use Cwd;
 use threads;
@@ -23,6 +24,11 @@ use FindBin qw($Bin);
 use Time::Local;
 use Time::gmtime;
 use Digest::CRC qw(crc);
+
+# Max Интервал для таблиц
+use constant {
+    TOT_max_interval => 10
+};
 
 #use Data::HexDump;
 
@@ -499,6 +505,7 @@ sub SendUDP {
 
     my $packet_size = 188;
 
+    my $lasTOTime = gettimeofday;
     my $TDTcontinuityCounter = 0;
     my $tail_packets;
     for(my $i=0;$i<5;$i++) { $tail_packets .= "\x47\x1f\xff\x10"."\xff" x 184; }  #делаем пачку из 7 нулевых пакетов 
@@ -550,42 +557,45 @@ sub SendUDP {
             $packetCounter += $chunkCount;
 
             if ($cfg{'TOT_TDT'} eq '1') {
-                # TOD TDT
-                my $epoch = time; #берем текущее время тут
-                
-                my $tm = gmtime($epoch);
-                #получаем дату по модифицированному юлианскому календарю.
-                my $mon = $tm->mon();
-                my $year = $tm->year();
-                my $mday = $tm->mday();
-                ++$mon;
-                my $l = $mon == 1 || $mon == 2 ? 1 : 0;
-                my $jmd = 14956 + $mday + int( ( $year - $l ) * 365.25 ) + int( ( $mon + 1 + $l * 12 ) * 30.6001 );
+                if ((gettimeofday - $lasTOTime) > TOT_max_interval) {
+                    # TOD TDT
+                    my $epoch = time; #берем текущее время тут
+                    
+                    my $tm = gmtime($epoch);
+                    #получаем дату по модифицированному юлианскому календарю.
+                    my $mon = $tm->mon();
+                    my $year = $tm->year();
+                    my $mday = $tm->mday();
+                    ++$mon;
+                    my $l = $mon == 1 || $mon == 2 ? 1 : 0;
+                    my $jmd = 14956 + $mday + int( ( $year - $l ) * 365.25 ) + int( ( $mon + 1 + $l * 12 ) * 30.6001 );
 
-                my $h=pack("C", ($tm->hour()/10) <<4 | ($tm->hour() % 10)); # 59 минут в Hex должны выглядеть как 59 а не 3b
-                my $m=pack("C", ($tm->min()/10)  <<4 | ($tm->min()  % 10));
-                my $s=pack("C", ($tm->sec()/10)  <<4 | ($tm->sec()  % 10));
+                    my $h=pack("C", ($tm->hour()/10) <<4 | ($tm->hour() % 10)); # 59 минут в Hex должны выглядеть как 59 а не 3b
+                    my $m=pack("C", ($tm->min()/10)  <<4 | ($tm->min()  % 10));
+                    my $s=pack("C", ($tm->sec()/10)  <<4 | ($tm->sec()  % 10));
 
-                my $hex_time=pack('n',$jmd).$h.$m.$s;
+                    my $hex_time=pack('n',$jmd).$h.$m.$s;
 
-                my $tot_header_len = "\x73\x00\x1a";                # TOT длина заголовока тоже сразу укзана 1a = 26 байт
-                my $tot_packet= "\x47\x40\x14".                     # TOT заголовок
-                                chr($TDTcontinuityCounter)."\x00".  # TOT continuity
-                                $tot_header_len.                    # 
-                                $hex_time.$cfg{'TOT'};              # TOT description
-                $tot_packet.=pack('N',crc( $tot_header_len.$hex_time.$cfg{'TOT'}, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); #добавили mpeg2 crc
-                $tot_packet.="\xff" x ($packet_size-length($tot_packet));
-                $TDTcontinuityCounter++;
+                    my $tot_header_len = "\x73\x00\x1a";                # TOT длина заголовока тоже сразу укзана 1a = 26 байт
+                    my $tot_packet= "\x47\x40\x14".                     # TOT заголовок
+                                    chr($TDTcontinuityCounter)."\x00".  # TOT continuity
+                                    $tot_header_len.                    # 
+                                    $hex_time.$cfg{'TOT'};              # TOT description
+                    $tot_packet.=pack('N',crc( $tot_header_len.$hex_time.$cfg{'TOT'}, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); #добавили mpeg2 crc
+                    $tot_packet.="\xff" x ($packet_size-length($tot_packet));
+                    $TDTcontinuityCounter++;
 
-                my $tdt_packet = "\x47\x40\x14".                    # TDT заголовок
-                                 chr($TDTcontinuityCounter)."\x00". # TDT continuity
-                                 "\x70\x70\x05".                    # TDT сразу забита и длина пакета 5 байт, по идее она всегда такая и будет
-                                 $hex_time;                         # TDT 2 байта дата в MJD и 3 байта время как есть.
-                $tdt_packet.="\xff" x ($packet_size-length($tdt_packet));
-                $TDTcontinuityCounter++;
-                if ($TDTcontinuityCounter > 15 ) {$TDTcontinuityCounter = 0; }
+                    my $tdt_packet = "\x47\x40\x14".                    # TDT заголовок
+                                     chr($TDTcontinuityCounter)."\x00". # TDT continuity
+                                     "\x70\x70\x05".                    # TDT сразу забита и длина пакета 5 байт, по идее она всегда такая и будет
+                                     $hex_time;                         # TDT 2 байта дата в MJD и 3 байта время как есть.
+                    $tdt_packet.="\xff" x ($packet_size-length($tdt_packet));
+                    $TDTcontinuityCounter++;
+                    if ($TDTcontinuityCounter > 15 ) {$TDTcontinuityCounter = 0; }
 
-                $multicast->mcast_send( $tot_packet.$tdt_packet.$tail_packets); #шлем блок или 7ми пакетов 2 с данными и 5 нулевых.
+                    $multicast->mcast_send( $tot_packet.$tdt_packet.$tail_packets); #шлем блок или 7ми пакетов 2 с данными и 5 нулевых.
+                    $lasTOTime = gettimeofday;
+                }
             }
             usleep( $gap );
         }
