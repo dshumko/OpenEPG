@@ -169,17 +169,18 @@ while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot
         my $tom = $tz % 60;            # минуты
         my $tmh = floor( $tom / 10 );  # десятки минут (45 - 4)
         my $tml = $tom % 10 ;          # единицы минут (45 - 5)
+        my $offset = chr(($thh << 4) + $thl).chr(($tmh << 4) + $tml); # сдвиг времени
+        
+        $epg_config{"TOT"} = "\x00\x0f\x58\x0d"                       # TOT дескриптора и его длина 13 байт. и длина всего вместе в начале
+                             . $country_code;                         # country_code
 
-        $epg_config{"TOT"} = "\x00\x0f\x58\x0d".                      # TOT дескриптора и его длина 13 байт. и длина всего вместе в начале
-                             $country_code;                           # country_code
+        if ($sgn > 0) { $epg_config{"TOT"}.= chr(($epg_config{"REGION_ID"} << 2) + 2);  }  # часов пояс + к UTC в начале первый байт 6 бит код региона, 1 бит резервный, 1 бит + или - сдвига.
+        else {          $epg_config{"TOT"}.= chr(($epg_config{"REGION_ID"} << 2) + 3);  }  # часов пояс - к UTC
 
-        if ($sgn > 0) { $epg_config{"TOT"}.= chr(($epg_config{"REGION_ID"} << 2)+2); }  # часов пояс + к UTC в начале первый байт 6 бит код региона, 1 бит резервный, 1 бит + или - сдвига.
-        else { $epg_config{"TOT"}.= chr(($epg_config{"REGION_ID"} << 2) + 3); }         # часов пояс - к UTC
 
-        $epg_config{"TOT"}.= chr(($thh << 4) + $thl).chr(($tmh << 4) + $tml);           # сдвиг времени сразу, это текущий сдвиг на данный момент. Сдвиг 3 часа 30 минут Должно передаваться как  0330 
-
-        $epg_config{"TOT"} .=  "\xEE\xEE\x23\x59\x59".                                  # время следующего сдвига (May 6, 2026 23:59:59.000000000 UTC), те в будущем
-                              chr(($thh << 4) + $thl).chr(($tmh << 4) + $tml);          # сдвиг который предполагается после даты, сделаем такой же сдвиг
+        $epg_config{"TOT"} .= $offset                                 # сдвиг времени сразу, это текущий сдвиг на данный момент. Сдвиг 3 часа 30 минут Должно передаваться как  0330 
+                             . "\x00\xED\x00\x00\x00"                 # время следующего сдвига 1995, те в прошлом
+                             . $offset;                               # сдвиг который предполагается после даты, сделаем такой же сдвиг
     }
     
     push @threads, threads->create(\&RunThread, %epg_config);
@@ -282,10 +283,10 @@ sub InitEitDb {
     my $number_of_segments = $cfg{"DAYS"} * 8; #(3days*8)
 
     my $sel_q = " select sc.Sid, n.Onid, coalesce(sc.Tsid, s.Tsid) Tsid, n.Nid, sc.Ch_Id, iif(s.Dvbs_Id = $dvbsid, 1, 0) as isactual
-        from Dvb_Network n
-        inner join Dvb_Streams s on (n.Dvbn_Id = s.Dvbn_Id)
-        inner join Dvb_Stream_Channels sc on (s.Dvbs_Id = sc.Dvbs_Id)
-        where (not sc.Sid is null) and ";
+                    from Dvb_Network n
+                    inner join Dvb_Streams s on (n.Dvbn_Id = s.Dvbn_Id)
+                    inner join Dvb_Stream_Channels sc on (s.Dvbs_Id = sc.Dvbs_Id)
+                    where (not sc.Sid is null) and ";
     # Будем ли передавать данные другого потока
     if ($cfg{"ACTUAL_OTHER"} == 1) {
         $sel_q = $sel_q." n.Dvbn_Id in (select a.Dvbn_Id from Dvb_Streams a where a.Dvbs_Id = $dvbsid) ";
@@ -326,7 +327,7 @@ sub ReadEpgData {
             $lang = $cfg{"COUNTRY"}
         }
         my $event;
-
+        
         if ($start =~ /^(\d+).(\d+).(\d+)\s+(\d+):(\d+):(\d+)$/) {
             my @t = ( $6, $5, $4, $1, $2 - 1, $3);
             $event->{start} = timegm(@t);
@@ -334,7 +335,7 @@ sub ReadEpgData {
         else {
             die( "Incorrect start time [$start]");
         }
-
+        
         if ($stop =~ /^(\d+).(\d+).(\d+)\s+(\d+):(\d+):(\d+)$/) {
             my @t = ( $6, $5, $4, $1, $2 - 1, $3);
             $event->{stop} = timegm(@t);
@@ -342,7 +343,7 @@ sub ReadEpgData {
         else {
             die( "Incorrect start time [$start]");
         }
-
+        
         $event->{uid} = $program;
         $event->{service_id} = $program;
 
@@ -483,10 +484,10 @@ sub ReadEpgData {
 
 sub BuildEPG {
     my ($tsEPG, $tsCarousel, %cfg) = @_;
-
+    
     my $pid = 18;
     my $interval = 30;  # calculate the chunk for 30 seconds
-
+    
     if ($tsEPG->updateEit( $pid )) {
         # Extract the snippet 
         my $pes = $tsEPG->getEit( $pid, $interval );
@@ -505,61 +506,63 @@ sub SendUDP {
     my $packet_size = 188;
 
     my $lasTOTime = gettimeofday;
-    my $TDTcontinuityCounter = 0;
+    my $ContinuityTDT = 0;
     my $tail_packets;
-    for(my $i=0;$i<5;$i++) { $tail_packets .= "\x47\x1f\xff\x10"."\xff" x 184; }  #делаем пачку из 7 нулевых пакетов 
-
+    for(my $i=0;$i<5;$i++) { $tail_packets .= "\x47\x1f\xff\x10"."\xff" x ($packet_size-4); }  #делаем пачку из 7 нулевых пакетов 
+    #my $playTime = gettimeofday;
     while( 1 ) {
         # get all data for the EIT
+        
+        #my $Time18 = gettimeofday;
         my $meta = $carousel->getMts( 18 );
-
+        #print " 18 read at ".(gettimeofday - $Time18)."\n";
         if (!defined $meta) {
-            print "TSID ".$cfg{"TS_NAME"}." No MTS chunk found for playing\n";
+            print "TSID ".$cfg{"TS_NAME"}." EPG data not found\n";
             sleep( 1 );
             next;
         }
-
+        
         # set the variables
         my $interval = $$meta[1];
         my $mts = $$meta[2];
         my $mtsCount = length( $mts) / $packet_size;
         my $packetCounter = 0;
-
+        
         # correct continuity counter    
         for (my $j = 3; $j < length( $mts ); $j += $packet_size) {
             substr( $mts, $j, 1, chr( 0b00010000 | ( $continuityCounter & 0x0f ) ) );
             $continuityCounter += 1;
         }
-
+        
         # add stuffing packets to have a multiple of 7 packets in the buffer
         # Why 7 packets? 
         # 7 x 188 = 1316
         # Because 7 TS packets fit in a typical UDP packet.
         my $i = $mtsCount % 7;
         while ( $i > 0 && $i < 7) {
-            $mts .= "\x47\x1f\xff\x10"."\xff" x 184;    # stuffing packet
+            $mts .= "\x47\x1f\xff\x10"."\xff" x ($packet_size-4);    # stuffing packet
             $i += 1;
         }
-
+        
         # correct the count of packets
         $mtsCount = length( $mts) / $packet_size;
-
+        
         # calculate the waiting time between playing chunks of 7 packets in micro seconds
         my $gap = ceil( $interval / $mtsCount * 7 * 1000);
-
+        
         # play packets of 7 x 188bytes
         while ($packetCounter < $mtsCount) {
             my $chunkCount = $mtsCount - $packetCounter;
             $chunkCount = 7 if $chunkCount > 7;
-
+            
             $multicast->mcast_send(substr( $mts, $packetCounter * $packet_size, $chunkCount * $packet_size));
             $packetCounter += $chunkCount;
-
+            
             if ($cfg{'TOT_TDT'} eq '1') {
                 if ((gettimeofday - $lasTOTime) > TOT_max_interval) {
+                    # print "TOT ".(gettimeofday - $playTime)."\n";
                     # TOD TDT
-                    my $epoch = time; #берем текущее время тут
-                    
+                    my $epoch = time; #берем текущее время
                     my $tm = gmtime($epoch); # Время по UTC
                     #получаем дату по модифицированному юлианскому календарю.
                     my $mon = $tm->mon();
@@ -568,40 +571,39 @@ sub SendUDP {
                     ++$mon;
                     my $l = $mon == 1 || $mon == 2 ? 1 : 0;
                     my $jmd = 14956 + $mday + int( ( $year - $l ) * 365.25 ) + int( ( $mon + 1 + $l * 12 ) * 30.6001 );
-
-                    my $h=pack("C", ($tm->hour()/10) <<4 | ($tm->hour() % 10)); # 59 минут в Hex должны выглядеть как 59 а не 3b
-                    my $m=pack("C", ($tm->min()/10)  <<4 | ($tm->min()  % 10));
-                    my $s=pack("C", ($tm->sec()/10)  <<4 | ($tm->sec()  % 10));
-
-                    my $hex_time=pack('n',$jmd).$h.$m.$s;
-
-                    my $tot_header_len = "\x73\x70\x1a";                # TOT длина заголовока тоже сразу укзана 1a = 26 байт
-                    my $tot_packet= "\x47\x40\x14".                     # TOT заголовок
-                                    chr($TDTcontinuityCounter)."\x00".  # TOT continuity
-                                    $tot_header_len.                    # 
-                                    $hex_time.$cfg{'TOT'};              # TOT description
-                    $tot_packet.=pack('N',crc( $tot_header_len.$hex_time.$cfg{'TOT'}, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); #добавили mpeg2 crc
-                    $tot_packet.="\xff" x ($packet_size-length($tot_packet));
-                    $TDTcontinuityCounter++;
-
-                    my $tdt_packet = "\x47\x40\x14".                    # TDT заголовок
-                                     chr($TDTcontinuityCounter)."\x00". # TDT continuity
-                                     "\x70\x70\x05".                    # TDT сразу забита и длина пакета 5 байт, по идее она всегда такая и будет
-                                     $hex_time;                         # TDT 2 байта дата в MJD и 3 байта время как есть.
-                    $tdt_packet.="\xff" x ($packet_size-length($tdt_packet));
-                    $TDTcontinuityCounter++;
-                    if ($TDTcontinuityCounter > 15 ) {$TDTcontinuityCounter = 0; }
-
-                    $multicast->mcast_send( $tot_packet.$tdt_packet.$tail_packets); #шлем блок или 7ми пакетов 2 с данными и 5 нулевых.
+                    
+                    my $h = pack("C", ($tm->hour()/10) <<4 | ($tm->hour() % 10)); # 59 минут в Hex должны выглядеть как 59 а не 3b
+                    my $m = pack("C", ($tm->min()/10)  <<4 | ($tm->min()  % 10));
+                    my $s = pack("C", ($tm->sec()/10)  <<4 | ($tm->sec()  % 10));
+                    
+                    my $hex_time = pack('n',$jmd).$h.$m.$s;
+                    
+                    my $tot_packet = "\x47\x40\x14"                    # MPEG TS заголовок
+                                    . chr(16 + $ContinuityTDT)."\x00"  # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
+                                    . "\x73\x70\x1a"                   # TOT длина заголовока тоже сразу укзана 1a = 26 байт
+                                    . $hex_time                        # Время
+                                    . $cfg{'TOT'}                      # description
+                                    . pack('N',crc( "\x73\x70\x1a".$hex_time.$cfg{'TOT'}, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); # mpeg2 crc
+                    $tot_packet .= "\xff" x ($packet_size-length($tot_packet)); # дополним нулевыми пакетами
+                    
+                    if ($ContinuityTDT < 16 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
+                    
+                    my $tdt_packet = "\x47\x40\x14"                    # MPEG TS заголовок 
+                                    . chr(16 + $ContinuityTDT)."\x00"  # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
+                                    . "\x70\x70\x05"                   # TDT заголовок и длина пакета 5 байт
+                                    . $hex_time;                       # 2 байта дата в MJD и 3 байта время как есть.
+                    $tdt_packet.="\xff" x ($packet_size-length($tdt_packet)); # дополним нулевыми пакетами
+                    
+                    if ($ContinuityTDT < 16 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
+                    
+                    $multicast->mcast_send( $tot_packet.$tdt_packet.$tail_packets );
                     $lasTOTime = gettimeofday;
                 }
             }
             usleep( $gap );
         }
-        my $end = time();
-        if (($end - $start) > $reload_time) {
-            last;
-        }
+        
+        if ((time() - $start) > $reload_time) { last; } # Если пора перегрузить расписание - выйдем
     }
 }
 
