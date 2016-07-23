@@ -135,6 +135,7 @@ else {
     $sel_q = $sel_q." where n.NID = ".$epg_config{"NETWORK_ID"};
 }
 
+#$sel_q = $sel_q." and s.Tsid = 1001 "; # for debug
 my $sth_s = $fbDb->prepare($sel_q);
 $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Network !";
 my @threads;
@@ -278,6 +279,7 @@ sub InitEitDb {
     my $tsCarousel = DVB::Carousel->new( $carouselDb ) || die( "Error opening carousel database [$carouselDb]: $!");
 
     $tsEpg->initdb() || die( "Initialization of EIT database failed");
+    
 
     my $number_of_segments = $cfg{"DAYS"} * 8; #(3days*8)
 
@@ -486,19 +488,19 @@ sub BuildEPG {
     
     my $pid = 18;
     my $interval = 30;  # calculate the chunk for 30 seconds
-    
+    my $SendTime = gettimeofday;
     if ($tsEPG->updateEit( $pid )) {
         # Extract the snippet 
         my $pes = $tsEPG->getEit( $pid, $interval );
-        printf("TSID %s bitrate %.3f kbps\n", $cfg{"TS_NAME"}, ( length( $pes ) * 8 / $interval / 1000 ));
         $tsCarousel->addMts( $pid, \$pes, $interval * 1000 );
+        printf( "TSID %s bitrate %.3f kbps (%s buld time %.3f)\n", $cfg{"TS_NAME"}, ( length( $pes ) * 8 / $interval / 1000 ), (scalar localtime(time())), (gettimeofday - $SendTime));
     }
 }
 
 sub SendUDP {
     my ($carousel, $multicast, %cfg) = @_;
     my $continuityCounter = 0;
-    my $start = time();
+    my $start = gettimeofday;
 
     my $reload_time = ($cfg{'RELOAD_TIME'}) * 60;
 
@@ -512,9 +514,9 @@ sub SendUDP {
     while( 1 ) {
         # get all data for the EIT
         
-        #my $Time18 = gettimeofday;
+        my $Time18 = gettimeofday;
         my $meta = $carousel->getMts( 18 );
-        #print " 18 read at ".(gettimeofday - $Time18)."\n";
+        #print "DEBUG\t".(scalar localtime(time()))."\t18 read at ".(gettimeofday - $Time18)."\n";
         if (!defined $meta) {
             print "TSID ".$cfg{"TS_NAME"}." EPG data not found\n";
             sleep( 1 );
@@ -585,7 +587,7 @@ sub SendUDP {
                                     . pack('N',crc( "\x73\x70\x1a".$hex_time.$cfg{'TOT'}, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); # mpeg2 crc
                     $tot_packet .= "\xff" x ($packet_size-length($tot_packet)); # дополним нулевыми пакетами
                     
-                    if ($ContinuityTDT < 16 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
+                    if ($ContinuityTDT < 15 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
                     
                     my $tdt_packet = "\x47\x40\x14"                    # MPEG TS заголовок 
                                     . chr(16 + $ContinuityTDT)."\x00"  # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
@@ -593,7 +595,7 @@ sub SendUDP {
                                     . $hex_time;                       # 2 байта дата в MJD и 3 байта время как есть.
                     $tdt_packet.="\xff" x ($packet_size-length($tdt_packet)); # дополним нулевыми пакетами
                     
-                    if ($ContinuityTDT < 16 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
+                    if ($ContinuityTDT < 15 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
                     
                     $multicast->mcast_send( $tot_packet.$tdt_packet.$tail_packets );
                     $lasTOTime = gettimeofday;
