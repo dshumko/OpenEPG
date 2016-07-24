@@ -25,10 +25,11 @@ use Time::Local;
 use Time::gmtime;
 use Digest::CRC qw(crc);
 
-# Max Интервал для таблиц
+# Вынесем констаны 
 use constant {
     TOT_max_interval => 10,  # TOT/TDT table interval
-    CHUNK_TIME => 30         # calculate the chunk for 30 seconds
+    CHUNK_TIME => 30,        # calculate the chunk for 30 seconds
+    MPEG_SIZE => 188         # MPEG ts packet size
 };
 
 $| = 1; # добавляет возможность перенаправлять вывод в файл. пример > openepg.log
@@ -38,34 +39,32 @@ my %epg_config = ();
 #Ищем OpenEPG.ini файл в каталоге со скриптом
 my $ini_file = $Bin.'/OpenEPG.ini';
 
-$epg_config{"DB_NAME"} = 'localhost:epg';
-$epg_config{"DB_USER"} = 'SYSDBA';
-$epg_config{"DB_PSWD"} = 'masterkey';
-$epg_config{"BIND_IP"} = '0.0.0.0';
-$epg_config{"TS_NAME"} = '';     # Будем хранить TSID
-$epg_config{"DAYS"} = 7;         # На сколько дней формировать EIT
-$epg_config{"TMP"} = cwd;        # Куда сохранять времменые файлы
-$epg_config{"RELOAD_TIME"} = 5;  # Через сколько минут перечитывать поток
-$epg_config{"EXPORT_TS"} = '0';  # Экспортировать TS в файл
-$epg_config{"NETWORK_ID"} = '';  # NID сети с которой работает генератор
-$epg_config{"ONID"} = '';        # ONID сети с которой работает генератор
-$epg_config{"READ_EPG"} = 60;    # Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать
-$epg_config{"DESC_LEN"} = 500;   # Количество символов в описании
-$epg_config{"RUS_PAGE"} = 1;     # Как кодировать язык. согласно EN 300 468, ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4)
-$epg_config{"TEXT_IN_UTF"} = 0;  # Передавать текст событий в UTF8 а не в ISO 
-$epg_config{"LONGREADLEN"} = 0;  # Если возникает ошибка LongReadLen, снимите комментарий. 1000 можно уменьшить. 
-$epg_config{"TOT_TDT"} = 0;      # Формировать таблицу TOT и TDT
-$epg_config{"REGION_ID"} = 0;    # Region_ID для TOT 
+$epg_config{"DB_NAME"} = 'localhost:epg';  # База Firebird A4on.TV
+$epg_config{"DB_USER"} = 'SYSDBA';         # пользователь Firebird
+$epg_config{"DB_PSWD"} = 'masterkey';      # пароль пользователя Firebird
+$epg_config{"BIND_IP"} = '0.0.0.0';        # через какой сетевой интерфейс передаем UDP
+$epg_config{"TS_NAME"} = '';               # Будем хранить TSID
+$epg_config{"DAYS"} = 7;                   # На сколько дней формировать EIT
+$epg_config{"TMP"} = cwd;                  # Куда сохранять времменые файлы
+$epg_config{"EXPORT_TS"} = '0';            # Экспортировать TS в файл
+$epg_config{"NETWORK_ID"} = '';            # NID сети с которой работает генератор
+$epg_config{"ONID"} = '';                  # ONID сети с которой работает генератор
+$epg_config{"READ_EPG"} = 60;              # Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать
+$epg_config{"DESC_LEN"} = 500;             # Количество символов в описании
+$epg_config{"RUS_PAGE"} = 1;               # Как кодировать язык. согласно EN 300 468, ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4)
+$epg_config{"TEXT_IN_UTF"} = 0;            # Передавать текст событий в UTF8 а не в ISO 
+$epg_config{"LONGREADLEN"} = 0;            # Если возникает ошибка LongReadLen, снимите комментарий. 1000 можно уменьшить. 
+$epg_config{"TOT_TDT"} = 0;                # Формировать таблицу TOT и TDT
+$epg_config{"REGION_ID"} = 0;              # Region_ID для TOT 
+# устарело $epg_config{"RELOAD_TIME"} = 5;       # Через сколько минут перечитывать поток
 
 # Проверим, если ini файл с сигнатурой BOM, то удалим ее
 my $fh = new IO::File "< $ini_file" or die "Cannot open $ini_file : $!";
 binmode($fh);
-
 my $buf;
 my $bom = "\xef\xbb\xbf";
 my $len = length($bom);
 my $buflen = 3;
-
 read($fh, $buf, $len);
 if (substr($buf, 0, 3) eq substr($bom, 0, 3)) {
     my $fw = new IO::File "> $ini_file.new" or die "Cannot open $ini_file.new : $!";
@@ -83,7 +82,7 @@ else {
     close($fh) or die "Error closing $ini_file : $!";
 }
 
-# Прочитаем EPG.INI  и заменим дефлтные настройки значениями с файла. раздел "EPG" 
+# Прочитаем EPG.INI  и заменим дефолтные настройки значениями с INI файла, раздел "EPG" 
 my $ini = Config::INI::Reader->read_file($ini_file);
 if (exists $ini->{'EPG'}) {
     %epg_config = (%epg_config, %{$ini->{'EPG'}});
@@ -97,33 +96,28 @@ else {
 }
 
 if ($epg_config{"DESC_LEN"} !~ /^\d+$/) {
-    print "Wrong description length parameter. Set length as 500 \n";
+    print "Wrong description length parameter. Set length = 500 \n";
     $epg_config{"DESC_LEN"} = 500;
 }
 
-# проверим чтоб дерриктория была со слешем в конце
+# проверим темповый каталог и создадим его
 if ((substr($epg_config{"TMP"}, -1) ne '/') and (substr($epg_config{"TMP"}, -1) ne '\\')) {
     $epg_config{"TMP"} = $epg_config{"TMP"}."/"; # добавим закрывающий слэш
 }
 mkdir $epg_config{"TMP"};
 
+# прочитаем настройки сети DVB из базы A4on.TV
 my $fbDb = DBI->connect("dbi:Firebird:db=".$epg_config{"DB_NAME"}.";ib_charset=UTF8",
     $epg_config{"DB_USER"},
     $epg_config{"DB_PSWD"},
     { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
 
-if ($epg_config{"LONGREADLEN"} > 0) {
-    $fbDb->{LongReadLen}=$epg_config{"LONGREADLEN"};
-}
-
-# $fbDb->{LongReadLen} = $epg_config{"DESC_LEN"}*2;
-# $fbDb->{LongTruncOk} = 1;
+if ($epg_config{"LONGREADLEN"} > 0) { $fbDb->{LongReadLen}=$epg_config{"LONGREADLEN"}; }
 
 my $sel_q = "select s.Dvbs_Id, coalesce(s.Aostrm, 0), lower(n.Country), s.Es_Ip UDPhost, s.Es_Port UDPport, coalesce(n.Descriptors,'') desc,
-    coalesce((select list(distinct c.Tsid) from Dvb_Stream_Channels c where c.Dvbs_Id = s.Dvbs_Id), 
-    coalesce(s.Tsid,'no TSID')) tsname, coalesce(n.Pids, '') pids, coalesce(n.timeoffset, 180) tz, coalesce(n.COUNTRY, 'RUS') country_code
-from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
-
+        coalesce((select list(distinct c.Tsid) from Dvb_Stream_Channels c where c.Dvbs_Id = s.Dvbs_Id), 
+        coalesce(s.Tsid,'no TSID')) tsname, coalesce(n.Pids, '') pids, coalesce(n.timeoffset, 180) tz, coalesce(n.COUNTRY, 'RUS') country_code
+    from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
 if ($epg_config{"NETWORK_ID"} eq '') {
     if ($epg_config{"ONID"} eq '') {
         $sel_q = $sel_q." where n.Dvbn_Id in (select first 1 d.Dvbn_Id from Dvb_Network d) ";
@@ -135,11 +129,12 @@ if ($epg_config{"NETWORK_ID"} eq '') {
 else {
     $sel_q = $sel_q." where n.NID = ".$epg_config{"NETWORK_ID"};
 }
-
-#$sel_q = $sel_q." and s.Tsid = 1001 "; # for debug
+# $sel_q = $sel_q." and s.Tsid = 1001 "; # for debug
 
 my $sth_s = $fbDb->prepare($sel_q);
 $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Network !";
+
+# создадим thread для каждого транспортного потока и запустим его
 my @threads;
 while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot, $tz, $country_code) = $sth_s->fetchrow_array()) {
     $epg_config{"ACTUAL_OTHER"} = $aostrm; # Передавать ли текущий/следующий поток в одном UDP потоке
@@ -190,11 +185,12 @@ while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot
 }
 $fbDb->disconnect();
 
-# Не дадим завершиться программе, пока работают все потоки
+# Приосединимся к потокам. Не дадим завершиться программе, пока работают все потоки
 foreach my $thread (@threads) {
     $thread->join();
 }
 
+# Основная процедура формирования EPG для транспортного потка. читаем / обновляем и передаем EPG
 sub RunThread {
     my %cfg = @_;
 
@@ -207,6 +203,12 @@ sub RunThread {
 
     my $tsSocket = IO::Socket::Multicast->new(Proto => 'udp') || die "Couldn't open socket";
 
+    my $continuityCounter = 0;
+    my $lasTOTime = gettimeofday;
+    my $ContinuityTDT = 0;
+    my $tail_packets;
+    for(my $i=0;$i<5;$i++) { $tail_packets .= "\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4); }  #делаем пачку из 7 нулевых пакетов 
+    
     if ($cfg{"BIND_IP"} ne '0.0.0.0') {
         $tsSocket->mcast_if($cfg{"BIND_IP"});
     }
@@ -216,11 +218,18 @@ sub RunThread {
 
     my $lastCheckEPG = '';
 
-    my $TimeToCheck = 0;
-
+    
+    my $threadSendUDP;
+    my $buildTime = CHUNK_TIME;
+    
+    my $start = gettimeofday;
+    my $TimeToReload = 0;
+    
     while (1) {
+        my $StartWhileTime = time(); # Время начала выполнения цикла. нужно для отслеживания времени перезагрузки расписания
         # пришло ли время проверять данные в базе A4on.TV
-        if ($TimeToCheck <= 0) {
+        if ($TimeToReload <= 0) {
+            my $DebugTime = gettimeofday;
             my $tsDb = DBI->connect("dbi:Firebird:db=".$cfg{"DB_NAME"}.";ib_charset=UTF8", $cfg{"DB_USER"},
                 $cfg{"DB_PSWD"},
                 { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
@@ -242,19 +251,44 @@ sub RunThread {
             $sth_s->finish();
             # проверим совпадает ли с тем что мы уже проверили
             if ($lastCheckEPG ne $EPGupdateON) {
-                my $DebugTime = gettimeofday;
                 InitEitDb($tsDb, %cfg);
                 ReadEpgData($tsEpg, $tsCarousel, $tsDb, %cfg);
                 printf( "TSID %s EPG updated in %s (%s read time %.3f)\n", $cfg{"TS_NAME"}, $EPGupdateON, (scalar localtime(time())), (gettimeofday - $DebugTime));
                 $lastCheckEPG = $EPGupdateON;
+                $buildTime = CHUNK_TIME; # Если обновили EIT, то не будем ждать перед обновлением EPG
             }
-
+            
             $tsDb->disconnect();
-            $TimeToCheck = $cfg{'READ_EPG'};
+            $TimeToReload = $cfg{'READ_EPG'};
+            # printf( "DEBUG\t%s\t%s\tCheck EPG\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $DebugTime));
         }
-
-        BuildEPG($tsEpg, $tsCarousel, %cfg);
-
+        
+        # сделано, чтоб получить свежее расписание перед запуском потока
+        $buildTime = ((CHUNK_TIME - $buildTime) / 1.4);
+        # printf( "DEBUG\t%s\t%s\tsleep for\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $buildTime);
+        usleep( $buildTime * 1000000 ); # сократим врмя ожидания до минимума
+        
+        $buildTime = BuildEPG($tsEpg, $tsCarousel, %cfg);
+        # printf( "DEBUG\t%s\t%s\tbuild for\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $buildTime);
+        # get all data for the EIT
+        my $Time18 = gettimeofday;
+        my $meta = $tsCarousel->getMts( 18 );
+        # printf( "DEBUG\t%s\t%s\t18 read  \t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $Time18));
+        $buildTime = $buildTime + (gettimeofday - $Time18);
+        if (defined $meta) {
+            if (defined $threadSendUDP) {
+                # подождем пока закончится поток с пересылкой по UDP с учетом времени формирования
+                my $Time18 = gettimeofday;
+                ($continuityCounter, $lasTOTime, $ContinuityTDT) = $threadSendUDP->join();
+                undef $threadSendUDP;
+                # printf( "DEBUG\t%s\t%s\twait thrd\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $Time18));
+            }
+            # printf( "DEBUG\t%s\t%s\tUDP start\n", $cfg{"TS_NAME"}, (scalar localtime(time())));
+            $threadSendUDP = threads->create({'context' => 'list'}, 'SendUDP', ( $tsSocket, $continuityCounter, $lasTOTime, $ContinuityTDT, $tail_packets, $$meta[1], $$meta[2], %cfg));
+        }
+        else { printf( "TSID %s EPG data not found\n", $cfg{"TS_NAME"}); }
+        undef $meta; # освободим память
+        # Если нужно, сохраним в файл
         if ($cfg{"EXPORT_TS"} eq '1') {
             my $pes = $tsEpg->getEit( 18, CHUNK_TIME );
             open( my $ts, ">", $epg_config{"TMP"}."eit$dvbsid.ts" ) || die "Error exporting TS chunk";
@@ -262,15 +296,14 @@ sub RunThread {
             print( $ts $pes );
             close( $ts );
         }
-
-        SendUDP($tsCarousel, $tsSocket, %cfg);
-
+        
         # Уменьшим счетчик времени при 0 или минусе будем заново формировать БД
-        $TimeToCheck = $TimeToCheck - $cfg{'RELOAD_TIME'};
+        $TimeToReload =  $TimeToReload - (time() - $StartWhileTime);
     }
 
 }
 
+# процедура инициаизации баз sqlite EPG
 sub InitEitDb {
     my ($tsDb, %cfg) = @_;
 
@@ -308,6 +341,7 @@ sub InitEitDb {
     $tsCarousel->initdb() || die( "Initialization of carousel database failed");
 }
 
+# Заполняем таблицы EIT данными
 sub ReadEpgData {
     my ($tsEPG, $tsCarousel, $tsDb, %cfg) = @_;
 
@@ -486,6 +520,7 @@ sub ReadEpgData {
     return 1;
 }
 
+# проверяем нужно ли пересоздавать текущий / следующий для EPG, если нужно пересоздаем
 sub BuildEPG {
     my ($tsEPG, $tsCarousel, %cfg) = @_;
     my $pid = 18;
@@ -496,119 +531,94 @@ sub BuildEPG {
         $tsCarousel->addMts( $pid, \$pes, CHUNK_TIME * 1000 );
         printf( "TSID %s bitrate %.3f kbps (%s buld time %.3f)\n", $cfg{"TS_NAME"}, ( length( $pes ) * 8 / CHUNK_TIME / 1000 ), (scalar localtime(time())), (gettimeofday - $SendTime));
     }
+    return (gettimeofday - $SendTime);
 }
 
 sub SendUDP {
-    my ($carousel, $multicast, %cfg) = @_;
-    my $continuityCounter = 0;
-    my $start = gettimeofday;
-
-    my $reload_time = ($cfg{'RELOAD_TIME'}) * 60;
-
-    my $packet_size = 188;
-
-    my $lasTOTime = gettimeofday;
-    my $ContinuityTDT = 0;
-    my $tail_packets;
-    for(my $i=0;$i<5;$i++) { $tail_packets .= "\x47\x1f\xff\x10"."\xff" x ($packet_size-4); }  #делаем пачку из 7 нулевых пакетов 
-    #my $playTime = gettimeofday;
-    while( 1 ) {
-        # get all data for the EIT
-        
-        my $Time18 = gettimeofday;
-        my $meta = $carousel->getMts( 18 );
-        #print "DEBUG\t".(scalar localtime(time()))."\t18 read for ".(gettimeofday - $Time18)."\n";
-        if (!defined $meta) {
-            print "TSID ".$cfg{"TS_NAME"}." EPG data not found\n";
-            sleep( 1 );
-            next;
-        }
-        
-        # set the variables
-        my $interval = $$meta[1];
-        my $mts = $$meta[2];
-        my $mtsCount = length( $mts) / $packet_size;
-        my $packetCounter = 0;
-        
-        # correct continuity counter    
-        for (my $j = 3; $j < length( $mts ); $j += $packet_size) {
-            substr( $mts, $j, 1, chr( 0b00010000 | ( $continuityCounter & 0x0f ) ) );
-            $continuityCounter += 1;
-        }
-        
-        # add stuffing packets to have a multiple of 7 packets in the buffer
-        # Why 7 packets? 
-        # 7 x 188 = 1316
-        # Because 7 TS packets fit in a typical UDP packet.
-        my $i = $mtsCount % 7;
-        while ( $i > 0 && $i < 7) {
-            $mts .= "\x47\x1f\xff\x10"."\xff" x ($packet_size-4);    # stuffing packet
-            $i += 1;
-        }
-        
-        # correct the count of packets
-        $mtsCount = length( $mts) / $packet_size;
-        
-        # calculate the waiting time between playing chunks of 7 packets in micro seconds
-        my $gap = ceil( $interval / $mtsCount * 7 * 1000);
-        
-        # play packets of 7 x 188bytes
-        while ($packetCounter < $mtsCount) {
-            my $chunkCount = $mtsCount - $packetCounter;
-            $chunkCount = 7 if $chunkCount > 7;
-            
-            $multicast->mcast_send(substr( $mts, $packetCounter * $packet_size, $chunkCount * $packet_size));
-            $packetCounter += $chunkCount;
-            
-            if ($cfg{'TOT_TDT'} eq '1') {
-                if ((gettimeofday - $lasTOTime) > TOT_max_interval) {
-                    # print "TOT ".(gettimeofday - $playTime)."\n";
-                    # TOD TDT
-                    my $epoch = time; #берем текущее время
-                    my $tm = gmtime($epoch); # Время по UTC
-                    #получаем дату по модифицированному юлианскому календарю.
-                    my $mon = $tm->mon();
-                    my $year = $tm->year();
-                    my $mday = $tm->mday();
-                    ++$mon;
-                    my $l = $mon == 1 || $mon == 2 ? 1 : 0;
-                    my $jmd = 14956 + $mday + int( ( $year - $l ) * 365.25 ) + int( ( $mon + 1 + $l * 12 ) * 30.6001 );
-                    
-                    my $h = pack("C", ($tm->hour()/10) <<4 | ($tm->hour() % 10)); # 59 минут в Hex должны выглядеть как 59 а не 3b
-                    my $m = pack("C", ($tm->min()/10)  <<4 | ($tm->min()  % 10));
-                    my $s = pack("C", ($tm->sec()/10)  <<4 | ($tm->sec()  % 10));
-                    
-                    my $hex_time = pack('n',$jmd).$h.$m.$s;
-                    
-                    my $tot_packet = "\x47\x40\x14"                    # MPEG TS заголовок
-                                    . chr(16 + $ContinuityTDT)."\x00"  # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
-                                    . "\x73\x70\x1a"                   # TOT длина заголовока тоже сразу укзана 1a = 26 байт
-                                    . $hex_time                        # Время
-                                    . $cfg{'TOT'}                      # description
-                                    . pack('N',crc( "\x73\x70\x1a".$hex_time.$cfg{'TOT'}, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); # mpeg2 crc
-                    $tot_packet .= "\xff" x ($packet_size-length($tot_packet)); # дополним нулевыми пакетами
-                    
-                    if ($ContinuityTDT < 15 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
-                    
-                    my $tdt_packet = "\x47\x40\x14"                    # MPEG TS заголовок 
-                                    . chr(16 + $ContinuityTDT)."\x00"  # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
-                                    . "\x70\x70\x05"                   # TDT заголовок и длина пакета 5 байт
-                                    . $hex_time;                       # 2 байта дата в MJD и 3 байта время как есть.
-                    $tdt_packet.="\xff" x ($packet_size-length($tdt_packet)); # дополним нулевыми пакетами
-                    
-                    if ($ContinuityTDT < 15 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
-                    
-                    $multicast->mcast_send( $tot_packet.$tdt_packet.$tail_packets );
-                    $lasTOTime = gettimeofday;
-                }
-            }
-            usleep( $gap );
-        }
-        
-        if ((time() - $start) > $reload_time) { last; } # Если пора перегрузить расписание - выйдем
+    my ($multicast, $continuityCounter, $lasTOTime, $ContinuityTDT, $tail_packets, $interval, $mts, %cfg) = @_;
+    
+    my $mtsCount = length( $mts) / MPEG_SIZE;
+    my $packetCounter = 0;
+    
+    # correct continuity counter    
+    for (my $j = 3; $j < length( $mts ); $j += MPEG_SIZE) {
+        substr( $mts, $j, 1, chr( 0b00010000 | ( $continuityCounter & 0x0f ) ) );
+        $continuityCounter += 1;
     }
+    
+    # add stuffing packets to have a multiple of 7 packets in the buffer
+    # Why 7 packets? 
+    # 7 x 188 = 1316
+    # Because 7 TS packets fit in a typical UDP packet.
+    my $i = $mtsCount % 7;
+    while ( $i > 0 && $i < 7) {
+        $mts .= "\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4);    # stuffing packet
+        $i += 1;
+    }
+    
+    # correct the count of packets
+    $mtsCount = length( $mts) / MPEG_SIZE;
+    
+    # calculate the waiting time between playing chunks of 7 packets in micro seconds
+    my $gap = ceil( $interval / $mtsCount * 7 * 1000);
+    
+    # play packets of 7 x 188bytes
+    while ($packetCounter < $mtsCount) {
+        my $chunkCount = $mtsCount - $packetCounter;
+        $chunkCount = 7 if $chunkCount > 7;
+        
+        $multicast->mcast_send(substr( $mts, $packetCounter * MPEG_SIZE, $chunkCount * MPEG_SIZE));
+        $packetCounter += $chunkCount;
+        
+        if ($cfg{'TOT_TDT'} eq '1') {
+            if ((gettimeofday - $lasTOTime) > TOT_max_interval) {
+                # print "TOT ".(gettimeofday - $playTime)."\n";
+                # TOD TDT
+                my $epoch = time; #берем текущее время
+                my $tm = gmtime($epoch); # Время по UTC
+                #получаем дату по модифицированному юлианскому календарю.
+                my $mon = $tm->mon();
+                my $year = $tm->year();
+                my $mday = $tm->mday();
+                ++$mon;
+                my $l = $mon == 1 || $mon == 2 ? 1 : 0;
+                my $jmd = 14956 + $mday + int( ( $year - $l ) * 365.25 ) + int( ( $mon + 1 + $l * 12 ) * 30.6001 );
+                
+                my $h = pack("C", ($tm->hour()/10) <<4 | ($tm->hour() % 10)); # 59 минут в Hex должны выглядеть как 59 а не 3b
+                my $m = pack("C", ($tm->min()/10)  <<4 | ($tm->min()  % 10));
+                my $s = pack("C", ($tm->sec()/10)  <<4 | ($tm->sec()  % 10));
+                
+                my $hex_time = pack('n',$jmd).$h.$m.$s;
+                
+                my $tot_packet = "\x47\x40\x14"                    # MPEG TS заголовок
+                                . chr(16 + $ContinuityTDT)."\x00"  # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
+                                . "\x73\x70\x1a"                   # TOT длина заголовока тоже сразу укзана 1a = 26 байт
+                                . $hex_time                        # Время
+                                . $cfg{'TOT'}                      # description
+                                . pack('N',crc( "\x73\x70\x1a".$hex_time.$cfg{'TOT'}, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); # mpeg2 crc
+                $tot_packet .= "\xff" x (MPEG_SIZE-length($tot_packet)); # дополним нулевыми пакетами
+                
+                if ($ContinuityTDT < 15 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
+                
+                my $tdt_packet = "\x47\x40\x14"                    # MPEG TS заголовок 
+                                . chr(16 + $ContinuityTDT)."\x00"  # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
+                                . "\x70\x70\x05"                   # TDT заголовок и длина пакета 5 байт
+                                . $hex_time;                       # 2 байта дата в MJD и 3 байта время как есть.
+                $tdt_packet.="\xff" x (MPEG_SIZE-length($tdt_packet)); # дополним нулевыми пакетами
+                
+                if ($ContinuityTDT < 15 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
+                
+                $multicast->mcast_send( $tot_packet.$tdt_packet.$tail_packets );
+                $lasTOTime = gettimeofday;
+            }
+        }
+        usleep( $gap );
+    }
+    
+    return ($continuityCounter, $lasTOTime, $ContinuityTDT);
 }
 
+# заменим симо=волы, которые некорректно отборажаються на ТВ
 sub CorrectISO {
     my ($string) = @_;
     $string = ReplaceChar($string, '«', '"');
