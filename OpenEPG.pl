@@ -27,7 +27,8 @@ use Digest::CRC qw(crc);
 
 # Max Интервал для таблиц
 use constant {
-    TOT_max_interval => 10
+    TOT_max_interval => 10,  # TOT/TDT table interval
+    CHUNK_TIME => 30         # calculate the chunk for 30 seconds
 };
 
 $| = 1; # добавляет возможность перенаправлять вывод в файл. пример > openepg.log
@@ -136,6 +137,7 @@ else {
 }
 
 #$sel_q = $sel_q." and s.Tsid = 1001 "; # for debug
+
 my $sth_s = $fbDb->prepare($sel_q);
 $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Network !";
 my @threads;
@@ -240,9 +242,10 @@ sub RunThread {
             $sth_s->finish();
             # проверим совпадает ли с тем что мы уже проверили
             if ($lastCheckEPG ne $EPGupdateON) {
-                print "TSID ".$cfg{"TS_NAME"}." EPG readed time $lastCheckEPG update time $EPGupdateON \n";
+                my $DebugTime = gettimeofday;
                 InitEitDb($tsDb, %cfg);
                 ReadEpgData($tsEpg, $tsCarousel, $tsDb, %cfg);
+                printf( "TSID %s EPG updated in %s (%s read time %.3f)\n", $cfg{"TS_NAME"}, $EPGupdateON, (scalar localtime(time())), (gettimeofday - $DebugTime));
                 $lastCheckEPG = $EPGupdateON;
             }
 
@@ -253,7 +256,7 @@ sub RunThread {
         BuildEPG($tsEpg, $tsCarousel, %cfg);
 
         if ($cfg{"EXPORT_TS"} eq '1') {
-            my $pes = $tsEpg->getEit( 18, 30 );
+            my $pes = $tsEpg->getEit( 18, CHUNK_TIME );
             open( my $ts, ">", $epg_config{"TMP"}."eit$dvbsid.ts" ) || die "Error exporting TS chunk";
             binmode( $ts);
             print( $ts $pes );
@@ -321,7 +324,7 @@ sub ReadEpgData {
                    from Get_Epg($dvbsid, current_date, dateadd(day, ".$cfg{"DAYS"}.", current_date), ".$cfg{"ACTUAL_OTHER"}.")";
     my $sth_s = $tsDb->prepare($sel_q, $attr);
     $sth_s->execute or die "ERROR: Failed execute SQL Get_Epg !";
-
+    
     while (my ($program, $start, $stop, $title, $synopsis, $minage, $lang, $dvbgenres) = $sth_s->fetchrow_array()) {
         #lang codes http://en.wikipedia.org/wiki/List_of_ISO_639-2_codes
         if (!defined $lang) {
@@ -485,15 +488,13 @@ sub ReadEpgData {
 
 sub BuildEPG {
     my ($tsEPG, $tsCarousel, %cfg) = @_;
-    
     my $pid = 18;
-    my $interval = 30;  # calculate the chunk for 30 seconds
     my $SendTime = gettimeofday;
     if ($tsEPG->updateEit( $pid )) {
         # Extract the snippet 
-        my $pes = $tsEPG->getEit( $pid, $interval );
-        $tsCarousel->addMts( $pid, \$pes, $interval * 1000 );
-        printf( "TSID %s bitrate %.3f kbps (%s buld time %.3f)\n", $cfg{"TS_NAME"}, ( length( $pes ) * 8 / $interval / 1000 ), (scalar localtime(time())), (gettimeofday - $SendTime));
+        my $pes = $tsEPG->getEit( $pid, CHUNK_TIME );
+        $tsCarousel->addMts( $pid, \$pes, CHUNK_TIME * 1000 );
+        printf( "TSID %s bitrate %.3f kbps (%s buld time %.3f)\n", $cfg{"TS_NAME"}, ( length( $pes ) * 8 / CHUNK_TIME / 1000 ), (scalar localtime(time())), (gettimeofday - $SendTime));
     }
 }
 
@@ -516,7 +517,7 @@ sub SendUDP {
         
         my $Time18 = gettimeofday;
         my $meta = $carousel->getMts( 18 );
-        #print "DEBUG\t".(scalar localtime(time()))."\t18 read at ".(gettimeofday - $Time18)."\n";
+        #print "DEBUG\t".(scalar localtime(time()))."\t18 read for ".(gettimeofday - $Time18)."\n";
         if (!defined $meta) {
             print "TSID ".$cfg{"TS_NAME"}." EPG data not found\n";
             sleep( 1 );
