@@ -253,7 +253,7 @@ sub RunThread {
             if ($lastCheckEPG ne $EPGupdateON) {
                 InitEitDb($tsDb, %cfg);
                 ReadEpgData($tsEpg, $tsCarousel, $tsDb, %cfg);
-                printf( "TSID %s EPG updated in %s (%s read time %.3f)\n", $cfg{"TS_NAME"}, $EPGupdateON, (scalar localtime(time())), (gettimeofday - $DebugTime));
+                printf( "TSID %s\tupdated %s\t(%s done in %.3f)\n", $cfg{"TS_NAME"}, $EPGupdateON, (scalar localtime(time())), (gettimeofday - $DebugTime));
                 $lastCheckEPG = $EPGupdateON;
                 $buildTime = CHUNK_TIME; # Если обновили EIT, то не будем ждать перед обновлением EPG
             }
@@ -264,9 +264,11 @@ sub RunThread {
         }
         
         # сделано, чтоб получить свежее расписание перед запуском потока
-        $buildTime = ((CHUNK_TIME - $buildTime) / 1.4);
-        # printf( "DEBUG\t%s\t%s\tsleep for\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $buildTime);
-        usleep( $buildTime * 1000000 ); # сократим врмя ожидания до минимума
+        $buildTime = ((CHUNK_TIME - $buildTime) / 1.7);
+        if ($buildTime > 5) {
+            # printf( "DEBUG\t%s\t%s\tsleep for\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $buildTime);
+            usleep( $buildTime * 1000000 ); # сократим врмя ожидания до минимума
+        }
         
         $buildTime = BuildEPG($tsEpg, $tsCarousel, %cfg);
         # printf( "DEBUG\t%s\t%s\tbuild for\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $buildTime);
