@@ -42,6 +42,7 @@ my $ini_file = $Bin.'/OpenEPG.ini';
 $epg_config{"DB_NAME"} = 'localhost:epg';  # База Firebird A4on.TV
 $epg_config{"DB_USER"} = 'SYSDBA';         # пользователь Firebird
 $epg_config{"DB_PSWD"} = 'masterkey';      # пароль пользователя Firebird
+$epg_config{"DEBUG"} = 0;                  # Вывод отладки в консоль
 $epg_config{"BIND_IP"} = '0.0.0.0';        # через какой сетевой интерфейс передаем UDP
 $epg_config{"TS_NAME"} = '';               # Будем хранить TSID
 $epg_config{"DAYS"} = 7;                   # На сколько дней формировать EIT
@@ -56,6 +57,7 @@ $epg_config{"TEXT_IN_UTF"} = 0;            # Передавать текст с�
 $epg_config{"LONGREADLEN"} = 0;            # Если возникает ошибка LongReadLen, снимите комментарий. 1000 можно уменьшить. 
 $epg_config{"TOT_TDT"} = 0;                # Формировать таблицу TOT и TDT
 $epg_config{"REGION_ID"} = 0;              # Region_ID для TOT 
+
 # устарело $epg_config{"RELOAD_TIME"} = 5;       # Через сколько минут перечитывать поток
 
 # Проверим, если ini файл с сигнатурой BOM, то удалим ее
@@ -260,22 +262,22 @@ sub RunThread {
             
             $tsDb->disconnect();
             $TimeToReload = $cfg{'READ_EPG'};
-            # printf( "DEBUG\t%s\t%s\tCheck EPG\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $DebugTime));
+            if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\tCheck EPG\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $DebugTime)); }
         }
         
         # сделано, чтоб получить свежее расписание перед запуском потока
         $buildTime = ((CHUNK_TIME - $buildTime) / 1.7);
         if ($buildTime > 5) {
-            # printf( "DEBUG\t%s\t%s\tsleep for\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $buildTime);
+            if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\tsleep for\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $buildTime); }
             usleep( $buildTime * 1000000 ); # сократим врмя ожидания до минимума
         }
         
         $buildTime = BuildEPG($tsEpg, $tsCarousel, %cfg);
-        # printf( "DEBUG\t%s\t%s\tbuild for\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $buildTime);
+        if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\tbuild for\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $buildTime); }
         # get all data for the EIT
         my $Time18 = gettimeofday;
         my $meta = $tsCarousel->getMts( 18 );
-        # printf( "DEBUG\t%s\t%s\t18 read  \t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $Time18));
+        if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\t18 read  \t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $Time18)); }
         $buildTime = $buildTime + (gettimeofday - $Time18);
         if (defined $meta) {
             if (defined $threadSendUDP) {
@@ -283,9 +285,9 @@ sub RunThread {
                 my $Time18 = gettimeofday;
                 ($continuityCounter, $lasTOTime, $ContinuityTDT) = $threadSendUDP->join();
                 undef $threadSendUDP;
-                # printf( "DEBUG\t%s\t%s\twait thrd\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $Time18));
+                if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\twait thrd\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $Time18)); }
             }
-            # printf( "DEBUG\t%s\t%s\tUDP start\n", $cfg{"TS_NAME"}, (scalar localtime(time())));
+            if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\tUDP start\n", $cfg{"TS_NAME"}, (scalar localtime(time()))); }
             $threadSendUDP = threads->create({'context' => 'list'}, 'SendUDP', ( $tsSocket, $continuityCounter, $lasTOTime, $ContinuityTDT, $tail_packets, $$meta[1], $$meta[2], %cfg));
         }
         else { printf( "TSID %s EPG data not found\n", $cfg{"TS_NAME"}); }
