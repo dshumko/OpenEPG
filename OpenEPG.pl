@@ -28,7 +28,7 @@ use Digest::CRC qw(crc);
 # Вынесем констаны 
 use constant {
     TOT_max_interval => 10,  # TOT/TDT table interval
-    CHUNK_TIME => 30,        # calculate the chunk for 30 seconds
+    CHUNK_TIME => 30,        # calculate the chunk for X seconds
     MPEG_SIZE => 188         # MPEG ts packet size
 };
 
@@ -39,26 +39,27 @@ my %epg_config = ();
 #Ищем OpenEPG.ini файл в каталоге со скриптом
 my $ini_file = $Bin.'/OpenEPG.ini';
 
-$epg_config{"DB_NAME"} = 'localhost:epg';  # База Firebird A4on.TV
-$epg_config{"DB_USER"} = 'SYSDBA';         # пользователь Firebird
-$epg_config{"DB_PSWD"} = 'masterkey';      # пароль пользователя Firebird
-$epg_config{"DEBUG"} = 0;                  # Вывод отладки в консоль
-$epg_config{"BIND_IP"} = '0.0.0.0';        # через какой сетевой интерфейс передаем UDP
-$epg_config{"TS_NAME"} = '';               # Будем хранить TSID
-$epg_config{"DAYS"} = 7;                   # На сколько дней формировать EIT
-$epg_config{"TMP"} = cwd;                  # Куда сохранять времменые файлы
-$epg_config{"EXPORT_TS"} = '0';            # Экспортировать TS в файл
-$epg_config{"NETWORK_ID"} = '';            # NID сети с которой работает генератор
-$epg_config{"ONID"} = '';                  # ONID сети с которой работает генератор
-$epg_config{"READ_EPG"} = 60;              # Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать
-$epg_config{"DESC_LEN"} = 500;             # Количество символов в описании
-$epg_config{"RUS_PAGE"} = 1;               # Как кодировать язык. согласно EN 300 468, ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4)
-$epg_config{"TEXT_IN_UTF"} = 0;            # Передавать текст событий в UTF8 а не в ISO 
-$epg_config{"LONGREADLEN"} = 0;            # Если возникает ошибка LongReadLen, снимите комментарий. 1000 можно уменьшить. 
-$epg_config{"TOT_TDT"} = 0;                # Формировать таблицу TOT и TDT
-$epg_config{"REGION_ID"} = 0;              # Region_ID для TOT 
-
-# устарело $epg_config{"RELOAD_TIME"} = 5;       # Через сколько минут перечитывать поток
+$epg_config{"DB_USER"}     = 'SYSDBA';        # пользователь Firebird
+$epg_config{"DB_NAME"}     = 'localhost:epg'; # База Firebird A4on.TV
+$epg_config{"DB_PSWD"}     = 'masterkey';     # пароль пользователя Firebird
+$epg_config{"DEBUG"}       = 0;               # Вывод отладки в консоль
+$epg_config{"BIND_IP"}     = '0.0.0.0';       # через какой сетевой интерфейс передаем UDP
+$epg_config{"TS_NAME"}     = '';              # Будем хранить TSID
+$epg_config{"DAYS"}        = 7;               # На сколько дней формировать EIT
+$epg_config{"TMP"}         = cwd;             # Куда сохранять времменые файлы
+$epg_config{"USEMEMORY"}   = 0;               # создавать файлы базы в памяти
+$epg_config{"EXPORT_TS"}   = '0';             # Экспортировать TS в файл
+$epg_config{"NETWORK_ID"}  = '';              # NID сети с которой работает генератор
+$epg_config{"ONID"}        = '';              # ONID сети с которой работает генератор
+$epg_config{"READ_EPG"}    = 60;              # Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать
+$epg_config{"DESC_LEN"}    = 500;             # Количество символов в описании
+$epg_config{"RUS_PAGE"}    = 1;               # Как кодировать язык. согласно EN 300 468, ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4)
+$epg_config{"TEXT_IN_UTF"} = 0;               # Передавать текст событий в UTF8 а не в ISO 
+$epg_config{"LONGREADLEN"} = 0;               # Если возникает ошибка LongReadLen, снимите комментарий. 1000 можно уменьшить. 
+$epg_config{"TOT_TDT"}     = 0;               # Формировать таблицу TOT и TDT
+$epg_config{"REGION_ID"}   = 0;               # Region_ID для TOT 
+$epg_config{"PF_ONLY"}     = 1;               # Для не текущего TS создавать только таблица текущая/следующая программа present/following
+# устарело $epg_config{"RELOAD_TIME"} = 5;          # Через сколько минут перечитывать поток
 
 # Проверим, если ini файл с сигнатурой BOM, то удалим ее
 my $fh = new IO::File "< $ini_file" or die "Cannot open $ini_file : $!";
@@ -131,7 +132,8 @@ if ($epg_config{"NETWORK_ID"} eq '') {
 else {
     $sel_q = $sel_q." where n.NID = ".$epg_config{"NETWORK_ID"};
 }
-# $sel_q = $sel_q." and s.Tsid = 1001 "; # for debug
+
+#$sel_q = $sel_q." and s.Tsid = 1001 "; # for debug ########################################################### DEBUG only
 
 my $sth_s = $fbDb->prepare($sel_q);
 $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Network !";
@@ -145,12 +147,12 @@ while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot
     $epg_config{"UDPhost"} = $UDPhost;
     $epg_config{"UDPport"} = $UDPport;
     $epg_config{"TS_NAME"} = $tsname;
-
+    
     $epg_config{"TOT_TDT"}  = 0; # Формировать таблицу TOT и TDT
     $epg_config{"SHOW_EXT"} = 0; # Передавать расш. описание
     $epg_config{"SHOW_AGE"} = 0; # Передавать возраст
     $epg_config{"SHOW_GNR"} = 0; # Передавать жанр
-
+    
     if (index($desc, 'ExtendedEventDescriptor') >= 0)  { $epg_config{"SHOW_EXT"} = "1"; }
     if (index($desc, 'ParentalRatingDescriptor') >= 0) { $epg_config{"SHOW_AGE"} = "1"; }
     if (index($desc, 'ContentDescriptor') >= 0)        { $epg_config{"SHOW_GNR"} = "1"; }
@@ -165,7 +167,7 @@ while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot
         my $toh = floor( $tz  / 60 );  # Часы
         my $thh = floor( $toh / 10 );  # десятки часов (12 - 1)
         my $thl = $toh % 10 ;          # единицы часов (12 - 2)
-
+        
         my $tom = $tz % 60;            # минуты
         my $tmh = floor( $tom / 10 );  # десятки минут (45 - 4)
         my $tml = $tom % 10 ;          # единицы минут (45 - 5)
@@ -173,10 +175,10 @@ while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot
         
         $epg_config{"TOT"} = "\x00\x0f\x58\x0d"                       # TOT дескриптора и его длина 13 байт. и длина всего вместе в начале
                              . $country_code;                         # country_code
-
+        
         if ($sgn > 0) { $epg_config{"TOT"}.= chr(($epg_config{"REGION_ID"} << 2) + 2);  }  # часов пояс + к UTC в начале первый байт 6 бит код региона, 1 бит резервный, 1 бит + или - сдвига.
         else {          $epg_config{"TOT"}.= chr(($epg_config{"REGION_ID"} << 2) + 3);  }  # часов пояс - к UTC
-
+        
         $epg_config{"TOT"} .= $offset                                 # сдвиг времени сразу, это текущий сдвиг на данный момент. Сдвиг 3 часа 30 минут Должно передаваться как  0330 
                              . "\xD9\x5E\x00\x00\x00"                 # время следующего сдвига 1995, те в прошлом
                              . $offset;                               # сдвиг который предполагается после даты, сделаем такой же сдвиг
@@ -195,13 +197,18 @@ foreach my $thread (@threads) {
 # Основная процедура формирования EPG для транспортного потка. читаем / обновляем и передаем EPG
 sub RunThread {
     my %cfg = @_;
-
+    
     my $dvbsid = $cfg{"DVBS_ID"};
     my $eitDb = $cfg{"TMP"}.'eit'.$dvbsid.'.sqlite';
     my $carouselDb = $cfg{"TMP"}.'carousel'.$dvbsid.'.sqlite';
-
-    my $tsEpg = DVB::Epg->new( $eitDb ) || die( "Error opening EIT database [$eitDb]: $!");
-    my $tsCarousel = DVB::Carousel->new( $carouselDb ) || die( "Error opening carousel database [$carouselDb]: $!");
+    
+    if ($cfg{"USEMEMORY"}) {
+        $eitDb = 'memory';
+        $carouselDb = 'memory';
+    }
+    
+    $cfg{"tsEpg"} = DVB::Epg->new( $eitDb ) || die( "Error opening EIT database [$eitDb]: $!");
+    $cfg{"tsCarousel"} = DVB::Carousel->new( $carouselDb ) || die( "Error opening carousel database [$carouselDb]: $!");
 
     my $tsSocket = IO::Socket::Multicast->new(Proto => 'udp') || die "Couldn't open socket";
 
@@ -254,7 +261,7 @@ sub RunThread {
             # проверим совпадает ли с тем что мы уже проверили
             if ($lastCheckEPG ne $EPGupdateON) {
                 InitEitDb($tsDb, %cfg);
-                ReadEpgData($tsEpg, $tsCarousel, $tsDb, %cfg);
+                ReadEpgData( $tsDb, %cfg );
                 printf( "TSID %s\tupdated %s\t(%s done in %.3f)\n", $cfg{"TS_NAME"}, $EPGupdateON, (scalar localtime(time())), (gettimeofday - $DebugTime));
                 $lastCheckEPG = $EPGupdateON;
                 $buildTime = CHUNK_TIME; # Если обновили EIT, то не будем ждать перед обновлением EPG
@@ -266,17 +273,17 @@ sub RunThread {
         }
         
         # сделано, чтоб получить свежее расписание перед запуском потока
-        $buildTime = ((CHUNK_TIME - $buildTime) / 1.7);
+        $buildTime = ((CHUNK_TIME - $buildTime) / 2);
         if ($buildTime > 5) {
             if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\tsleep for\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $buildTime); }
             usleep( $buildTime * 1000000 ); # сократим врмя ожидания до минимума
         }
         
-        $buildTime = BuildEPG($tsEpg, $tsCarousel, %cfg);
+        $buildTime = BuildEPG( %cfg );
         if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\tbuild for\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $buildTime); }
         # get all data for the EIT
         my $Time18 = gettimeofday;
-        my $meta = $tsCarousel->getMts( 18 );
+        my $meta = $cfg{"tsCarousel"}->getMts( 18 );
         if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\t18 read  \t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $Time18)); }
         $buildTime = $buildTime + (gettimeofday - $Time18);
         if (defined $meta) {
@@ -294,7 +301,7 @@ sub RunThread {
         undef $meta; # освободим память
         # Если нужно, сохраним в файл
         if ($cfg{"EXPORT_TS"} eq '1') {
-            my $pes = $tsEpg->getEit( 18, CHUNK_TIME );
+            my $pes = $cfg{"tsEpg"}->getEit( 18, CHUNK_TIME );
             open( my $ts, ">", $epg_config{"TMP"}."eit$dvbsid.ts" ) || die "Error exporting TS chunk";
             binmode( $ts);
             print( $ts $pes );
@@ -304,25 +311,17 @@ sub RunThread {
         # Уменьшим счетчик времени при 0 или минусе будем заново формировать БД
         $TimeToReload =  $TimeToReload - (time() - $StartWhileTime);
     }
-
 }
 
 # процедура инициаизации баз sqlite EPG
 sub InitEitDb {
     my ($tsDb, %cfg) = @_;
-
-    my $dvbsid = $cfg{"DVBS_ID"};
-    my $eitDb = $cfg{"TMP"}.'eit'.$dvbsid.'.sqlite';
-    my $carouselDb = $cfg{"TMP"}.'carousel'.$dvbsid.'.sqlite';
-
-    my $tsEpg = DVB::Epg->new( $eitDb ) || die( "Error opening EIT database [$eitDb]: $!");
-    my $tsCarousel = DVB::Carousel->new( $carouselDb ) || die( "Error opening carousel database [$carouselDb]: $!");
-
-    $tsEpg->initdb() || die( "Initialization of EIT database failed");
     
-
+    $cfg{"tsEpg"}->initdb() || die( "Initialization of EIT database failed");
+    
+    my $dvbsid = $cfg{"DVBS_ID"};
     my $number_of_segments = $cfg{"DAYS"} * 8; #(3days*8)
-
+    
     my $sel_q = " select sc.Sid, n.Onid, coalesce(sc.Tsid, s.Tsid) Tsid, n.Nid, sc.Ch_Id, iif(s.Dvbs_Id = $dvbsid, 1, 0) as isactual
                     from Dvb_Network n
                     inner join Dvb_Streams s on (n.Dvbn_Id = s.Dvbn_Id)
@@ -339,15 +338,15 @@ sub InitEitDb {
     my $sth_s = $tsDb->prepare($sel_q);
     $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Stream_Channels !";
     while ( my ($sid, $onid, $tsid, $nid, $chid, $isactual) = $sth_s->fetchrow_array()) {
-        $tsEpg->addEit( 18, $sid, $onid, $tsid, $chid, $number_of_segments, $isactual, '');
+        $cfg{"tsEpg"}->addEit( 18, $sid, $onid, $tsid, $chid, $number_of_segments, $isactual, '');
     }
 
-    $tsCarousel->initdb() || die( "Initialization of carousel database failed");
+    $cfg{"tsCarousel"}->initdb() || die( "Initialization of carousel database failed");
 }
 
 # Заполняем таблицы EIT данными
 sub ReadEpgData {
-    my ($tsEPG, $tsCarousel, $tsDb, %cfg) = @_;
+    my ( $tsDb, %cfg ) = @_;
 
     my $dvbsid = $cfg{"DVBS_ID"};
 
@@ -518,7 +517,7 @@ sub ReadEpgData {
 
         $event->{descriptors} = \@descriptors;
 
-        $tsEPG->addEvent( $event);
+        $cfg{"tsEpg"}->addEvent( $event);
     }
 
     return 1;
@@ -526,13 +525,13 @@ sub ReadEpgData {
 
 # проверяем нужно ли пересоздавать текущий / следующий для EPG, если нужно пересоздаем
 sub BuildEPG {
-    my ($tsEPG, $tsCarousel, %cfg) = @_;
+    my ( %cfg ) = @_;
     my $pid = 18;
     my $SendTime = gettimeofday;
-    if ($tsEPG->updateEit( $pid )) {
+    if ($cfg{"tsEpg"}->updateEit( $pid, $cfg{"PF_ONLY"} )) {
         # Extract the snippet 
-        my $pes = $tsEPG->getEit( $pid, CHUNK_TIME );
-        $tsCarousel->addMts( $pid, \$pes, CHUNK_TIME * 1000 );
+        my $pes = $cfg{"tsEpg"}->getEit( $pid, CHUNK_TIME );
+        $cfg{"tsCarousel"}->addMts( $pid, \$pes, CHUNK_TIME * 1000 );
         printf( "TSID %s bitrate %.3f kbps (%s buld time %.3f)\n", $cfg{"TS_NAME"}, ( length( $pes ) * 8 / CHUNK_TIME / 1000 ), (scalar localtime(time())), (gettimeofday - $SendTime));
     }
     return (gettimeofday - $SendTime);

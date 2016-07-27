@@ -46,7 +46,7 @@ our @EXPORT  = qw();
 
 Class initialization with sqlite3 database filename. 
 Open existing or create new sqlite database.
-
+if file name is "memory" dtatabase create in memory, without create on hdd
 =cut
 
 sub new {
@@ -55,17 +55,29 @@ sub new {
     my $self  = {};
 
     $self->{filename} = shift;
-    $self->{dbh}      = DBI->connect( "dbi:SQLite:" . $self->{filename} )
-        or return -1;
-
-    $self->{dbh}->do( " PRAGMA synchronous = OFF; 
-                        PRAGMA temp_store = MEMORY; 
-                        PRAGMA auto_vacuum = NONE; 
-                        PRAGMA journal_mode = OFF;
-                        PRAGMA cache_size = 4000000;");
-
+    
+    if ($self->{filename} ne "memory") {
+        $self->{dbh} = DBI->connect( "dbi:SQLite:" . $self->{filename} ) or return -1;
+        $self->{dbh}->{sqlite_unicode} = 1;
+        $self->{dbh}->do( "PRAGMA synchronous = OFF; PRAGMA temp_store = MEMORY; PRAGMA auto_vacuum = NONE; PRAGMA journal_mode = OFF; PRAGMA cache_size = 4000000;" );
+    }
+    else {
+        $self->{dbh} = DBI->connect( "dbi:SQLite:dbname=:memory:") or return -1;
+        $self->{dbh}->do( "PRAGMA synchronous = OFF; PRAGMA temp_store = MEMORY; PRAGMA auto_vacuum = NONE; PRAGMA journal_mode = OFF;" );        
+    }
+    
     bless( $self, $class );
     return $self;
+}
+
+=head3 dbh( )
+
+Return database handle for direct control.
+
+=cut
+
+sub dbh {
+    return $_[0]->{dbh};
 }
 
 =head3 initdb( )

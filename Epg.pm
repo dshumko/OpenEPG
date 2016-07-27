@@ -68,6 +68,7 @@ our @EXPORT  = qw();
 
 Class initialization with sqlite3 database filename. 
 Open existing or create new sqlite database.
+if file name is "memory" dtatabase create in memory, without create on hdd
 
 =cut
 
@@ -75,13 +76,18 @@ sub new {
     my $this  = shift;
     my $class = ref($this) || $this;
     my $self  = {};
-
-    $self->{filename} = shift;
-    $self->{dbh}      = DBI->connect( "dbi:SQLite:" . $self->{filename} ) or return;
     
-    $self->{dbh}->{sqlite_unicode} = 1;
-    $self->{dbh}->do( "PRAGMA synchronous = OFF; PRAGMA temp_store = MEMORY; PRAGMA auto_vacuum = NONE; PRAGMA cache_size = 4000000; " );
-
+    $self->{filename} = shift;
+    
+    if ($self->{filename} ne "memory") {
+        $self->{dbh}      = DBI->connect( "dbi:SQLite:" . $self->{filename} ) or return;
+        $self->{dbh}->{sqlite_unicode} = 1;
+        $self->{dbh}->do( "PRAGMA synchronous = OFF; PRAGMA temp_store = MEMORY; PRAGMA auto_vacuum = NONE; PRAGMA journal_mode = OFF; PRAGMA cache_size = 4000000;" );
+    }
+    else {
+        $self->{dbh} = DBI->connect( "dbi:SQLite:dbname=:memory:") or return;
+        $self->{dbh}->do( "PRAGMA synchronous = OFF; PRAGMA temp_store = MEMORY; PRAGMA auto_vacuum = NONE; PRAGMA journal_mode = OFF;" );        
+    }
     bless( $self, $class );
     return $self;
 }
@@ -437,9 +443,10 @@ sub deleteEit {
           . ( defined $transport_stream_id ? " AND transport_stream_id=$transport_stream_id" : "" ) );
 }
 
-=head3 updateEit( $pid )
+=head3 updateEit( $pid, $forAllPFonly )
 
 Use eit rules for updateing Eit sections of given $pid in database.
+$forAllPFonly say that skip create shedule for other TS
 
 Return 1 on success.
 Return 0 if sections are already uptodate.
@@ -450,6 +457,8 @@ Return undef on error;
 sub updateEit {
     my $self = shift;
     my $pid = shift;
+    my $forAllPFonly = shift;
+    
     my $dbh  = $self->{dbh};
     my $updated = 0;
 
@@ -474,7 +483,7 @@ sub updateEit {
 
         # and then calculate schedule
         if ( $rule->{maxsegments} > 0 ) {
-            $ret = $self->updateEitSchedule($rule);
+            $ret = $self->updateEitSchedule( $rule, $forAllPFonly );
             if( ! defined $ret) {
                 return;
             };
@@ -623,17 +632,20 @@ sub updateEitPresent {
     );
 }
 
-=head3 updateEitSchedule( $rule)
+=head3 updateEitSchedule( $rule, $forAllPFonly )
 
 Update eit playout packet for given $rule.
 $rule is reference to hash containing keys:
 pid, service_id, original_network_id, transport_stream_id, service_id, maxsegments, actual
+$forAllPFonly say that skip create shedule for other TS
 
 =cut
 
 sub updateEitSchedule {
     my $self = shift;
-    my $rule = shift;
+    my $rule = shift; 
+    my $forAllPFonly = shift;
+    
     my $dbh  = $self->{dbh};
 
     my $num_subtable = int( ( $rule->{maxsegments} - 1 ) / 32 );
@@ -650,14 +662,19 @@ sub updateEitSchedule {
     
     # iterate over all subtables
     my $subtable_count = 0;
+    
     while ( $subtable_count <= $num_subtable ) {
-
+        
+        if ($forAllPFonly == 1) {
+            if ($rule->{actual} != 1) { next; }
+        }
+        
         # extend the $rule information
         $rule->{table_id} =
           ( $rule->{actual} == 1 ? 0x50 : 0x60 ) + $subtable_count;
-
+        
         my $schedule = new DVB::EventInformationTable($rule);
-
+        
         # lookup version_number used at last generation of eit and timestamp
         my $select = $dbh->prepare(
             "SELECT version_number, strftime('%s',timestamp) FROM eit_version 
@@ -666,7 +683,7 @@ sub updateEitSchedule {
         $select->execute();
         my ( $last_version_number, $last_update_timestamp ) =
           $select->fetchrow_array();
-
+        
         # if lookup wasn't succesfull we need to update the eit anyway
         if ( !defined $last_version_number ) {
             $last_update_timestamp = 0;
@@ -783,12 +800,12 @@ sub updateEitSchedule {
         return if !$dbh->do( "INSERT OR REPLACE INTO eit_version VALUES ( $rule->{pid}, $rule->{service_id}, $rule->{table_id}, $last_version_number, datetime( $current_time,'unixepoch'))");
     }
     continue {
-        ++$subtable_count;
+        ++$subtable_count; 
     }
     return 0;
 }
 
-=head3 getEit( $pid, $timeFrame)
+=head3 getEit( $pid, $timeFrame )
 
 Build final EIT from all sections in table for given $pid and $timeFrame.
 
@@ -802,6 +819,7 @@ sub getEit {
     my $self = shift;
     my $pid  = shift;
     my $timeFrame = shift;      # this is the time frame for which we are building the fragment of the TS
+    
     my $dbh  = $self->{dbh};
 
     if ( !defined $pid) {
