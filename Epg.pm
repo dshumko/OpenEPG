@@ -662,16 +662,19 @@ sub updateEitSchedule {
     
     # iterate over all subtables
     my $subtable_count = 0;
-    
+    my $skipCount = 0;
     while ( $subtable_count <= $num_subtable ) {
         
         if ($forAllPFonly == 1) {
-            if ($rule->{actual} != 1) { next; }
+            if ($rule->{actual} != 1) { 
+                ++$skipCount;
+                next; 
+            }
         }
         
         # extend the $rule information
         $rule->{table_id} =
-          ( $rule->{actual} == 1 ? 0x50 : 0x60 ) + $subtable_count;
+          ( $rule->{actual} == 1 ? 0x50 : 0x60 ) + ($subtable_count - $skipCount);
         
         my $schedule = new DVB::EventInformationTable($rule);
         
@@ -691,7 +694,7 @@ sub updateEitSchedule {
         }
 
         # first segment number in this subtable
-        my $first_segment = $subtable_count * 32;
+        my $first_segment = ($subtable_count - $skipCount) * 32;
 
         # start of subtable interval
         my $subtable_start = $last_midnight + $first_segment * 3 * 60 * 60;
