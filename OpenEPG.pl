@@ -239,37 +239,40 @@ sub RunThread {
         # пришло ли время проверять данные в базе A4on.TV
         if ($TimeToReload <= 0) {
             my $DebugTime = gettimeofday;
-            my $tsDb = DBI->connect("dbi:Firebird:db=".$cfg{"DB_NAME"}.";ib_charset=UTF8", $cfg{"DB_USER"},
-                $cfg{"DB_PSWD"},
-                { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
+            my $tsDb;
+            if ($tsDb=DBI->connect("dbi:Firebird:db=".$cfg{"DB_NAME"}.";ib_charset=UTF8", $cfg{"DB_USER"}, $cfg{"DB_PSWD"}, { RaiseError => 0, PrintError => 0, AutoCommit => 1, ib_enable_utf8 => 1 } )) {
                 
-            if ($cfg{"LONGREADLEN"} > 0) {
-                $tsDb->{LongReadLen}=$epg_config{"LONGREADLEN"};
+                if ($cfg{"LONGREADLEN"} > 0) {
+                    $tsDb->{LongReadLen}=$epg_config{"LONGREADLEN"};
+                }
+                # Время в формате 26.02.2015 23:50:00
+                my $attr = {
+                    ib_timestampformat => '%d.%m.%Y %H:%M:%S',
+                    ib_dateformat      => '%d.%m.%Y',
+                    ib_timeformat      => '%H:%M:%S',
+                };
+                # Прочитаем последнее изменение в БД
+                my $sel_DVBs = "select Coalesce(s.EPG_UPDATED, current_timestamp) from Dvb_Streams s where s.Dvbs_Id = $dvbsid";
+                my $sth_s = $tsDb->prepare($sel_DVBs, $attr);
+                $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Streams !";
+                my ($EPGupdateON) = $sth_s->fetchrow_array();
+                $sth_s->finish();
+                # проверим совпадает ли с тем что мы уже проверили
+                if ($lastCheckEPG ne $EPGupdateON) {
+                    InitEitDb($tsDb, %cfg);
+                    ReadEpgData( $tsDb, %cfg );
+                    printf( "TSID %s\tupdated %s\t(%s done in %.3f)\n", $cfg{"TS_NAME"}, $EPGupdateON, (scalar localtime(time())), (gettimeofday - $DebugTime));
+                    $lastCheckEPG = $EPGupdateON;
+                    $buildTime = CHUNK_TIME; # Если обновили EIT, то не будем ждать перед обновлением EPG
+                }
+                
+                $tsDb->disconnect();
+                $TimeToReload = $cfg{'READ_EPG'};
+                if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\tCheck EPG\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $DebugTime)); }
             }
-            # Время в формате 26.02.2015 23:50:00
-            my $attr = {
-                ib_timestampformat => '%d.%m.%Y %H:%M:%S',
-                ib_dateformat      => '%d.%m.%Y',
-                ib_timeformat      => '%H:%M:%S',
-            };
-            # Прочитаем последнее изменение в БД
-            my $sel_DVBs = "select Coalesce(s.EPG_UPDATED, current_timestamp) from Dvb_Streams s where s.Dvbs_Id = $dvbsid";
-            my $sth_s = $tsDb->prepare($sel_DVBs, $attr);
-            $sth_s->execute or die "ERROR: Failed execute SQL Dvb_Streams !";
-            my ($EPGupdateON) = $sth_s->fetchrow_array();
-            $sth_s->finish();
-            # проверим совпадает ли с тем что мы уже проверили
-            if ($lastCheckEPG ne $EPGupdateON) {
-                InitEitDb($tsDb, %cfg);
-                ReadEpgData( $tsDb, %cfg );
-                printf( "TSID %s\tupdated %s\t(%s done in %.3f)\n", $cfg{"TS_NAME"}, $EPGupdateON, (scalar localtime(time())), (gettimeofday - $DebugTime));
-                $lastCheckEPG = $EPGupdateON;
-                $buildTime = CHUNK_TIME; # Если обновили EIT, то не будем ждать перед обновлением EPG
+            else {
+                    printf( "TSID %s\t%s\tCan't connect to %s, will try again in %.0f minutes\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $cfg{"DB_NAME"}, $cfg{'READ_EPG'} );
             }
-            
-            $tsDb->disconnect();
-            $TimeToReload = $cfg{'READ_EPG'};
-            if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\tCheck EPG\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $DebugTime)); }
         }
         
         # сделано, чтоб получить свежее расписание перед запуском потока
@@ -320,12 +323,12 @@ sub InitEitDb {
     $cfg{"tsEpg"}->initdb() || die( "Initialization of EIT database failed");
     
     my $dvbsid = $cfg{"DVBS_ID"};
-    my $number_of_segments = $cfg{"DAYS"} * 8; #(3days*8)
+    my $number_of_segments = $cfg{"DAYS"} * 8;
     
     my $sel_q = " select sc.Sid, n.Onid, coalesce(sc.Tsid, s.Tsid) Tsid, n.Nid, sc.Ch_Id, iif(s.Dvbs_Id = $dvbsid, 1, 0) as isactual
                     from Dvb_Network n
-                    inner join Dvb_Streams s on (n.Dvbn_Id = s.Dvbn_Id)
-                    inner join Dvb_Stream_Channels sc on (s.Dvbs_Id = sc.Dvbs_Id)
+                        inner join Dvb_Streams s on (n.Dvbn_Id = s.Dvbn_Id)
+                        inner join Dvb_Stream_Channels sc on (s.Dvbs_Id = sc.Dvbs_Id)
                     where (not sc.Sid is null) and ";
     # Будем ли передавать данные другого потока
     if ($cfg{"ACTUAL_OTHER"} == 1) {
