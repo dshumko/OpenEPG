@@ -28,6 +28,7 @@ use Digest::CRC qw(crc);
 # Вынесем констаны 
 use constant {
     TOT_max_interval => 10,  # TOT/TDT table interval
+    TOT_regions_cnt => 9,   # Count regions in TOT 
     CHUNK_TIME => 30,        # calculate the chunk for X seconds
     MPEG_SIZE => 188         # MPEG ts packet size
 };
@@ -57,9 +58,9 @@ $epg_config{"RUS_PAGE"}    = 1;               # Как кодировать яз
 $epg_config{"TEXT_IN_UTF"} = 0;               # Передавать текст событий в UTF8 а не в ISO 
 $epg_config{"LONGREADLEN"} = 0;               # Если возникает ошибка LongReadLen, снимите комментарий. 1000 можно уменьшить. 
 $epg_config{"TOT_TDT"}     = 0;               # Формировать таблицу TOT и TDT
-$epg_config{"REGION_ID"}   = 0;               # Region_ID для TOT 
+$epg_config{"REGION_ID"}   = 0;               # С какого Region_ID генерировать 8-мь регионов для TOT 
 $epg_config{"PF_ONLY"}     = 1;               # Для не текущего TS создавать только таблица текущая/следующая программа present/following
-# устарело $epg_config{"RELOAD_TIME"} = 5;          # Через сколько минут перечитывать поток
+# устарело $epg_config{"RELOAD_TIME"} = 5;           # Через сколько минут перечитывать поток
 
 # Проверим, если ini файл с сигнатурой BOM, то удалим ее
 my $fh = new IO::File "< $ini_file" or die "Cannot open $ini_file : $!";
@@ -172,16 +173,20 @@ while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot
         my $tmh = floor( $tom / 10 );  # десятки минут (45 - 4)
         my $tml = $tom % 10 ;          # единицы минут (45 - 5)
         my $offset = chr(($thh << 4) + $thl).chr(($tmh << 4) + $tml); # сдвиг времени
+        my $TOT = "";
         
-        $epg_config{"TOT"} = "\x00\x0f\x58\x0d"                       # TOT дескриптора и его длина 13 байт. и длина всего вместе в начале
-                             . $country_code;                         # country_code
-        
-        if ($sgn > 0) { $epg_config{"TOT"}.= chr(($epg_config{"REGION_ID"} << 2) + 2);  }  # часов пояс + к UTC в начале первый байт 6 бит код региона, 1 бит резервный, 1 бит + или - сдвига.
-        else {          $epg_config{"TOT"}.= chr(($epg_config{"REGION_ID"} << 2) + 3);  }  # часов пояс - к UTC
-        
-        $epg_config{"TOT"} .= $offset                                 # сдвиг времени сразу, это текущий сдвиг на данный момент. Сдвиг 3 часа 30 минут Должно передаваться как  0330 
-                             . "\xD9\x5E\x00\x00\x00"                 # время следующего сдвига 1995, те в прошлом
-                             . $offset;                               # сдвиг который предполагается после даты, сделаем такой же сдвиг
+        if ($sgn > 0) {$sgn = 2;} # часов пояс + к UTC
+        else          {$sgn = 3;} # часов пояс - к UTC
+        for(my $i=$epg_config{"REGION_ID"};$i<($epg_config{"REGION_ID"} + TOT_regions_cnt);$i++) {             # Сделаем таблицу из 10 регионов с одинаковым смещением. Зачем эти регионы, непонятно.
+            $TOT.= $country_code                           # country_code
+                . chr(($i << 2) + $sgn)                    # сдвиг UTC в начале первый байт 6 бит код региона, 1 бит резервный, 1 бит + или - сдвига.
+                . $offset                                  # сдвиг времени сразу, это текущий сдвиг на данный момент. Сдвиг 3 часа 30 минут Должно передаваться как  0330 
+                . "\xD9\x5E\x00\x00\x00"                   # время следующего сдвига 1995, те в прошлом
+                . $offset;                                 # сдвиг который предполагается после даты, сделаем такой же сдвиг
+        }
+        $epg_config{"TOT"} = "\xF0".chr(2+(13*TOT_regions_cnt))
+                           . "\x58".chr(TOT_regions_cnt*13)     # TOT дескриптора и его длина по 13 байт. и длина всего вместе в начале
+                           . $TOT;                              # TOT дескриптор
     }
     
     push @threads, threads->create(\&RunThread, %epg_config);
@@ -293,15 +298,23 @@ sub RunThread {
             if (defined $threadSendUDP) {
                 # подождем пока закончится поток с пересылкой по UDP с учетом времени формирования
                 my $Time18 = gettimeofday;
-                ($continuityCounter, $lasTOTime, $ContinuityTDT) = $threadSendUDP->join();
+                ( $lasTOTime, $ContinuityTDT ) = $threadSendUDP->join();
+                
                 undef $threadSendUDP;
                 if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\twait thrd\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $Time18)); }
             }
             if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\tUDP start\n", $cfg{"TS_NAME"}, (scalar localtime(time()))); }
-            $threadSendUDP = threads->create({'context' => 'list'}, 'SendUDP', ( $tsSocket, $continuityCounter, $lasTOTime, $ContinuityTDT, $tail_packets, $$meta[1], $$meta[2], %cfg));
+            
+            my $mts = $$meta[2];
+            # correct continuity counter
+            for (my $j = 3; $j < length( $mts ); $j += MPEG_SIZE) {
+                substr( $mts, $j, 1, chr( 0b00010000 | ( $continuityCounter & 0x0f ) ) );
+                $continuityCounter += 1;
+            }
+            
+            $threadSendUDP = threads->create({'context' => 'list'}, 'SendUDP', ( $tsSocket, $lasTOTime, $ContinuityTDT, $tail_packets, $$meta[1], $mts, %cfg));
         }
         else { printf( "TSID %s EPG data not found\n", $cfg{"TS_NAME"}); }
-        undef $meta; # освободим память
         # Если нужно, сохраним в файл
         if ($cfg{"EXPORT_TS"} eq '1') {
             my $pes = $cfg{"tsEpg"}->getEit( 18, CHUNK_TIME );
@@ -541,16 +554,16 @@ sub BuildEPG {
 }
 
 sub SendUDP {
-    my ($multicast, $continuityCounter, $lasTOTime, $ContinuityTDT, $tail_packets, $interval, $mts, %cfg) = @_;
+    my ($multicast, $lasTOTime, $ContinuityTDT, $tail_packets, $interval, $mts, %cfg) = @_;
     
-    my $mtsCount = length( $mts) / MPEG_SIZE;
+    my $mtsCount = length( $mts ) / MPEG_SIZE;
     my $packetCounter = 0;
     
-    # correct continuity counter    
-    for (my $j = 3; $j < length( $mts ); $j += MPEG_SIZE) {
-        substr( $mts, $j, 1, chr( 0b00010000 | ( $continuityCounter & 0x0f ) ) );
-        $continuityCounter += 1;
-    }
+    # correct continuity counter
+    #for (my $j = 3; $j < length( $mts ); $j += MPEG_SIZE) {
+    #    substr( $mts, $j, 1, chr( 0b00010000 | ( $continuityCounter & 0x0f ) ) );
+    #    $continuityCounter += 1;
+    #}
     
     # add stuffing packets to have a multiple of 7 packets in the buffer
     # Why 7 packets? 
@@ -563,7 +576,7 @@ sub SendUDP {
     }
     
     # correct the count of packets
-    $mtsCount = length( $mts) / MPEG_SIZE;
+    $mtsCount = length( $mts ) / MPEG_SIZE;
     
     # calculate the waiting time between playing chunks of 7 packets in micro seconds
     my $gap = ceil( $interval / $mtsCount * 7 * 1000);
@@ -596,12 +609,12 @@ sub SendUDP {
                 
                 my $hex_time = pack('n',$jmd).$h.$m.$s;
                 
-                my $tot_packet = "\x47\x40\x14"                    # MPEG TS заголовок
-                                . chr(16 + $ContinuityTDT)."\x00"  # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
-                                . "\x73\x70\x1a"                   # TOT длина заголовока тоже сразу укзана 1a = 26 байт
-                                . $hex_time                        # Время
-                                . $cfg{'TOT'}                      # description
-                                . pack('N',crc( "\x73\x70\x1a".$hex_time.$cfg{'TOT'}, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); # mpeg2 crc
+                my $tot_packet = "\x47\x40\x14"                            # MPEG TS заголовок
+                                . chr(16 + $ContinuityTDT)."\x00"          # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
+                                . "\x73\x70".chr(13+(13*TOT_regions_cnt))  # TOT длина заголовока тоже сразу укзана 1a = 26 байт
+                                . $hex_time                                # Время
+                                . $cfg{'TOT'}                              # description
+                                . pack('N',crc( "\x73\x70".chr(13+(13*TOT_regions_cnt)).$hex_time.$cfg{'TOT'}, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); # mpeg2 crc
                 $tot_packet .= "\xff" x (MPEG_SIZE-length($tot_packet)); # дополним нулевыми пакетами
                 
                 if ($ContinuityTDT < 15 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
@@ -621,7 +634,7 @@ sub SendUDP {
         usleep( $gap );
     }
     
-    return ($continuityCounter, $lasTOTime, $ContinuityTDT);
+    return ( $lasTOTime, $ContinuityTDT);
 }
 
 # заменим симо=волы, которые некорректно отборажаються на ТВ

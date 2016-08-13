@@ -4,3 +4,8 @@
 *.stackdump
 OpenEPG.exe_
 .idea/
+examples/
+Service/
+db.sqlite/carousel.sqlite
+db.sqlite/eit.sqlite
+_many_/OpenEPG.pl
