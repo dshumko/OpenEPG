@@ -308,8 +308,9 @@ sub RunThread {
             my $mts = $$meta[2];
             # correct continuity counter
             for (my $j = 3; $j < length( $mts ); $j += MPEG_SIZE) {
-                substr( $mts, $j, 1, chr( 0b00010000 | ( $continuityCounter & 0x0f ) ) );
+                substr( $mts, $j, 1, chr( 0b00010000 | $continuityCounter ) );
                 $continuityCounter += 1;
+                if ( $continuityCounter > 0x0f ) { $continuityCounter = 0; }
             }
             
             $threadSendUDP = threads->create({'context' => 'list'}, 'SendUDP', ( $tsSocket, $lasTOTime, $ContinuityTDT, $tail_packets, $$meta[1], $mts, %cfg));
