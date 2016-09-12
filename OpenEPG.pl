@@ -643,7 +643,8 @@ sub CorrectISO {
     my ($string) = @_;
     $string = ReplaceChar($string, '«', '"');
     $string = ReplaceChar($string, '»', '"');
-    $string = ReplaceChar($string, '—', '-');
+    $string = ReplaceChar($string, '—', '-'); #UTF E2 80 94
+    $string = ReplaceChar($string, '–', '-'); #UTF E2 80 93
     return($string);
 }
 
