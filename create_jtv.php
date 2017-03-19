@@ -7,7 +7,7 @@ Define('FB_DB',  'A4on_DB');
 Define('FB_USER','SYSDBA');
 Define('FB_PASS','masterkey');
 
-Define('TMP_DIR','c:/jtv/');
+Define('TMP_DIR', __DIR__.'/');
 Define('JTV_NAME','epg.zip');
 
 function get_filename($str) {

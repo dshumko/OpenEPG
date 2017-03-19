@@ -511,7 +511,7 @@ sub ReadEpgData {
                     $parental_descriptor->{descriptor_tag} = 0x55;    # parental rating descriptor
                     my $rate;
                     $rate->{country_code} = $lang;
-                    $rate->{rating} = $minage; # rating = age limitation - 3
+                    $rate->{rating} = $minage - 3;
                     push( @{$parental_descriptor->{list}}, $rate);
                     push( @descriptors, $parental_descriptor);
                 }
