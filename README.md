@@ -53,7 +53,10 @@ cpan IO::Socket::Multicast
 ```
 apt-get install libdbd-firebird-perl 
 ```
-
+Не забываем поставить make:
+```
+apt-get install build-essential
+```
 #### Описание параметров INI файла
 
 | Параметр | Значение по умолчанию | Описание |
