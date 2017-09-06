@@ -1,0 +1,7 @@
+MANIFEST
+Makefile.PL
+README
+Changes
+lib/DVB/Carousel.pm
+t/rsp.t
+META.yml                                 Module meta-data (added by MakeMaker)

@@ -54,12 +54,15 @@ cpan IO::Socket::Multicast
 apt-get install libdbd-firebird-perl 
 ```
 
+Не забываем менять заменить файлы Carousel.pm и Epg.pm
+в каталоге /usr/local/share/perl/5.20.2/DVB/ на файлы из репозитория.
+
 #### Описание параметров INI файла
 
 | Параметр | Значение по умолчанию | Описание |
 | --- | --- | --- |
 | DB_NAME | localhost:a4on_db | база данных с epg |
-| DB_USER | SYSDBA | пользователь базый данных Firebird |
+| DB_USER | SYSDBA | пользователь базы данных Firebird |
 | DB_PSWD | masterkey | пароль пользователя |
 | DAYS    | 7 | на какое количество дней формировать EIT |
 | TMP     | b:\epg.pl | где храним временные файлы |
@@ -71,7 +74,7 @@ apt-get install libdbd-firebird-perl
 | ONID | '' | ONID сети с которой работает генератор |
 | READ_EPG | 60 | Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать |
 | DESC_LEN | 500 | Количество символов в описании |
-| RUS_PAGE | 1 | Как кодировать язык. согласно EN 300 468, ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4) |
+| RUS_PAGE | 1 | Как кодировать язык. согласно EN 300 468, ISO/IEC 8859-5 [27] Latin/Cyrillic alphabet может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4) |
 | TEXT_IN_UTF | 0 | Передавать текст событий в 1 = UTF8, 0 = ISO |
 | LONGREADLEN | 1000 | Если возникает ошибка LongReadLen, снимите комментарий. 1000 можно уменьшить. |
 | TOT_TDT | 0 | Формировать таблицу TOT и TDT |

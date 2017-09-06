@@ -9,3 +9,4 @@ Service/
 db.sqlite/carousel.sqlite
 db.sqlite/eit.sqlite
 _many_/OpenEPG.pl
+.php_cs.cache

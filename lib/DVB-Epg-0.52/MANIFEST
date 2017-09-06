@@ -1,0 +1,7 @@
+MANIFEST
+Makefile.PL
+README
+Changes
+lib/DVB/Epg.pm
+t/epg.t
+META.yml                                 Module meta-data (added by MakeMaker)

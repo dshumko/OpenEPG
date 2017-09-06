@@ -1,0 +1,31 @@
+Revision history for DVB-Epg
+
+0.33   2012-09-12 10:47 CET
+        o First public release of software
+
+0.34   2012-09-14 01:06 CET
+        - Correction of eventDelete API
+        - Randomization of sections in generation of output TS
+
+0.44   2012-11-08 08:16 CET
+        - Minor correction in scheduler
+
+0.45   2012-12-26 00:55 CET
+        - Fixed incorrect usage of uid and service_id
+
+0.46   2013-01-13 20:55 CET
+        - Fixed usage of utf8
+
+0.47   2013-01-16 23:04 CET
+        - Update of documentation and remove of debugging code
+
+0.48   2013-02-07 10:42 CET
+        - Correction of building output chunk (25ms section gap)
+
+0.50   2013-02-21 22:58 CET
+        - Complete redesign of building output chunk. Now conform with 
+          Bridgetech and Dektec monitoring probe
+          
+0.51   2013-12-12 22:29 CET
+        - Code cleanup || -> //
+        - fix problem when inserting event with undefined event_id

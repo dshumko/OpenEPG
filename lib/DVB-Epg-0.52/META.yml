@@ -1,0 +1,24 @@
+--- #YAML:1.0
+name:               DVB-Epg
+version:            0.51
+abstract:           Generate MPEG-2 transport stream chunk containing DVB Event Information table.
+author:
+    - Bojan Ramšak <BojanR@gmx.net>
+license:            perl
+distribution_type:  module
+configure_requires:
+    ExtUtils::MakeMaker:  0
+build_requires:
+    ExtUtils::MakeMaker:  0
+requires:
+    DBD::SQLite:  1.29
+    Digest::CRC:  0.16
+    Test::More:   0
+no_index:
+    directory:
+        - t
+        - inc
+generated_by:       ExtUtils::MakeMaker version 6.55_02
+meta-spec:
+    url:      http://module-build.sourceforge.net/META-spec-v1.4.html
+    version:  1.4

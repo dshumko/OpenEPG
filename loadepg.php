@@ -234,7 +234,7 @@ class fbsql_db
             if ($this->debug) {
                 echo $sql . PHP_EOL;
             }
-            $transaction = ibase_trans(IBASE_READ + IBASE_COMMITTED + IBASE_NOWAIT, $this->session);
+            $transaction = ibase_trans(IBASE_READ | IBASE_COMMITTED | IBASE_NOWAIT, $this->session);
             $statement = ibase_query($transaction, $sql);
             $result = array();
             $i = 0;
@@ -255,7 +255,7 @@ class fbsql_db
     {
         if ($sql != "") {
             if ($this->debug) echo $sql . PHP_EOL;
-            $transaction = ibase_trans(IBASE_WRITE + IBASE_NOWAIT, $this->session);
+            $transaction = ibase_trans(IBASE_WRITE | IBASE_NOWAIT, $this->session);
             $statement = ibase_query($transaction, $sql);
             if ($statement) ibase_commit($transaction);
             return $statement;
