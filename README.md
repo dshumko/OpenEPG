@@ -53,17 +53,17 @@ cpan IO::Socket::Multicast
 ```
 apt-get install libdbd-firebird-perl 
 ```
-<<<<<<< HEAD
 
-Не забываем менять заменить файлы Carousel.pm и Epg.pm
+Если ставили из cpan, то не забываем менять заменить файлы Carousel.pm и Epg.pm
 в каталоге /usr/local/share/perl/5.20.2/DVB/ на файлы из репозитория.
+
 
 =======
 Не забываем поставить make:
 ```
 apt-get install build-essential
 ```
->>>>>>> 88c152b8db00c2e275d6ce65d85879faa3abfb02
+
 #### Описание параметров INI файла
 
 | Параметр | Значение по умолчанию | Описание |
