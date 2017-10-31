@@ -121,17 +121,15 @@ if ($epg_config{"LONGREADLEN"} > 0) { $fbDb->{LongReadLen}=$epg_config{"LONGREAD
 my $sel_q = "select s.Dvbs_Id, coalesce(s.Aostrm, 0), lower(n.Country), s.Es_Ip UDPhost, s.Es_Port UDPport, coalesce(n.Descriptors,'') desc,
         coalesce((select list(distinct c.Tsid) from Dvb_Stream_Channels c where c.Dvbs_Id = s.Dvbs_Id), 
         coalesce(s.Tsid,'no TSID')) tsname, coalesce(n.Pids, '') pids, coalesce(n.timeoffset, 180) tz, coalesce(n.COUNTRY, 'RUS') country_code
-    from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)";
-if ($epg_config{"NETWORK_ID"} eq '') {
-    if ($epg_config{"ONID"} eq '') {
-        $sel_q = $sel_q." where n.Dvbn_Id in (select first 1 d.Dvbn_Id from Dvb_Network d) ";
-    }
-    else {
-        $sel_q = $sel_q." where n.ONID = ".$epg_config{"ONID"};
-    }
+    from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)
+    where (not n.ONID is null) and (not n.NID is null) ";
+
+if ($epg_config{"NETWORK_ID"} ne '') {
+    $sel_q = $sel_q." and n.NID = ".$epg_config{"NETWORK_ID"};
 }
-else {
-    $sel_q = $sel_q." where n.NID = ".$epg_config{"NETWORK_ID"};
+
+if ($epg_config{"ONID"} ne '') {
+    $sel_q = $sel_q." and n.ONID = ".$epg_config{"ONID"};
 }
 
 #$sel_q = $sel_q." and s.Tsid = 1001 "; # for debug ########################################################### DEBUG only
