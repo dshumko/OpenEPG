@@ -41,6 +41,8 @@ Electronic Program Guide (EPG) Generator for Digital Video Broadcasting (DVB). E
 Подробно данный метод описывать не будем.
 Сервер использует следующие модули
 ```
+cpan DBI 
+cpan DBD::SQLite
 cpan DBD::Firebird
 cpan Digest::CRC
 cpan DVB::Epg 
