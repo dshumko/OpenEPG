@@ -28,7 +28,7 @@ use Digest::CRC qw(crc);
 # Вынесем констаны 
 use constant {
     TOT_max_interval => 10,  # TOT/TDT table interval
-    TOT_regions_cnt => 9,   # Count regions in TOT 
+    TOT_regions_cnt => 9,    # Count regions in TOT 
     CHUNK_TIME => 30,        # calculate the chunk for X seconds
     MPEG_SIZE => 188         # MPEG ts packet size
 };
@@ -122,7 +122,7 @@ my $sel_q = "select s.Dvbs_Id, coalesce(s.Aostrm, 0), lower(n.Country), s.Es_Ip 
         coalesce((select list(distinct c.Tsid) from Dvb_Stream_Channels c where c.Dvbs_Id = s.Dvbs_Id), 
         coalesce(s.Tsid,'no TSID')) tsname, coalesce(n.Pids, '') pids, coalesce(n.timeoffset, 180) tz, coalesce(n.COUNTRY, 'RUS') country_code
     from Dvb_Network n inner join Dvb_Streams s on (s.Dvbn_Id = n.Dvbn_Id)
-    where (not n.ONID is null) and (not n.NID is null) ";
+    where (not n.ONID is null) and (not n.NID is null) and (coalesce(s.Es_Ip,'') <> '') ";
 
 if ($epg_config{"NETWORK_ID"} ne '') {
     $sel_q = $sel_q." and n.NID = ".$epg_config{"NETWORK_ID"};
