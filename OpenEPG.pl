@@ -19,7 +19,6 @@ use Cwd;
 use threads;
 use IO::Socket::Multicast;
 use IO::File;
-use Digest::CRC qw(crc);
 use FindBin qw($Bin);
 use Time::Local;
 use Time::gmtime;
@@ -27,10 +26,11 @@ use Digest::CRC qw(crc);
 
 # Вынесем констаны 
 use constant {
-    TOT_max_interval => 10,  # TOT/TDT table interval
-    TOT_regions_cnt => 9,    # Count regions in TOT 
-    CHUNK_TIME => 30,        # calculate the chunk for X seconds
-    MPEG_SIZE => 188         # MPEG ts packet size
+    TOT_max_interval => 10,  # TOT/TDT table interval 
+    TOT_regions_cnt  => 9,   # Count regions in TOT 
+    CHUNK_TIME       => 30,  # calculate the chunk for X seconds
+    MPEG_SIZE        => 188, # MPEG ts packet size
+    TS_IN_UDP_PACKET => 7    # TS packets in a typical UDP packet. 7 recommended, because 7*188 = 1316 < max UDP packet size (1432))
 };
 
 $| = 1; # добавляет возможность перенаправлять вывод в файл. пример > openepg.log
@@ -216,10 +216,8 @@ sub RunThread {
     my $tsSocket = IO::Socket::Multicast->new(Proto => 'udp') || die "Couldn't open socket";
 
     my $continuityCounter = 0;
-    my $lasTOTime = gettimeofday;
+    my $lastTOTtime = gettimeofday;
     my $ContinuityTDT = 0;
-    my $tail_packets;
-    for(my $i=0;$i<5;$i++) { $tail_packets .= "\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4); }  #делаем пачку из 7 нулевых пакетов 
     
     if ($cfg{"BIND_IP"} ne '0.0.0.0') {
         $tsSocket->mcast_if($cfg{"BIND_IP"});
@@ -296,7 +294,7 @@ sub RunThread {
             if (defined $threadSendUDP) {
                 # подождем пока закончится поток с пересылкой по UDP с учетом времени формирования
                 my $Time18 = gettimeofday;
-                ( $lasTOTime, $ContinuityTDT ) = $threadSendUDP->join();
+                ( $lastTOTtime, $ContinuityTDT ) = $threadSendUDP->join();
                 
                 undef $threadSendUDP;
                 if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\twait thrd\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $Time18)); }
@@ -311,7 +309,7 @@ sub RunThread {
                 if ( $continuityCounter > 0x0f ) { $continuityCounter = 0; }
             }
             
-            $threadSendUDP = threads->create({'context' => 'list'}, 'SendUDP', ( $tsSocket, $lasTOTime, $ContinuityTDT, $tail_packets, $$meta[1], $mts, %cfg));
+            $threadSendUDP = threads->create({'context' => 'list'}, 'SendUDP', ( $tsSocket, $lastTOTtime, $ContinuityTDT, $$meta[1], $mts, %cfg));
         }
         else { printf( "TSID %s EPG data not found\n", $cfg{"TS_NAME"}); }
         # Если нужно, сохраним в файл
@@ -553,87 +551,82 @@ sub BuildEPG {
 }
 
 sub SendUDP {
-    my ($multicast, $lasTOTime, $ContinuityTDT, $tail_packets, $interval, $mts, %cfg) = @_;
+    my ($multicast, $lastTOTtime, $ContinuityTDT, $interval, $mts, %cfg) = @_;
     
     my $mtsCount = length( $mts ) / MPEG_SIZE;
-    my $packetCounter = 0;
     
-    # correct continuity counter
-    #for (my $j = 3; $j < length( $mts ); $j += MPEG_SIZE) {
-    #    substr( $mts, $j, 1, chr( 0b00010000 | ( $continuityCounter & 0x0f ) ) );
-    #    $continuityCounter += 1;
-    #}
-    
-    # add stuffing packets to have a multiple of 7 packets in the buffer
-    # Why 7 packets? 
-    # 7 x 188 = 1316
-    # Because 7 TS packets fit in a typical UDP packet.
-    my $i = $mtsCount % 7;
-    while ( $i > 0 && $i < 7) {
-        $mts .= "\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4);    # stuffing packet
-        $i += 1;
-    }
+    # add stuffing packets to have a multiple of TS_IN_UDP_PACKET packets in the buffer
+    my $i = $mtsCount % TS_IN_UDP_PACKET;
+    $mts .= (("\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4)) x (TS_IN_UDP_PACKET-$i));    # stuffing packet
     
     # correct the count of packets
     $mtsCount = length( $mts ) / MPEG_SIZE;
     
-    # calculate the waiting time between playing chunks of 7 packets in micro seconds
-    my $gap = ceil( $interval / $mtsCount * 7 * 1000);
+    # calculate the waiting time between playing chunks packets in micro seconds
+    my $gap = ceil( $interval / $mtsCount * TS_IN_UDP_PACKET * 1000);
     
-    # play packets of 7 x 188bytes
+    my $packetCounter = 0;
+    # play packets
     while ($packetCounter < $mtsCount) {
         my $chunkCount = $mtsCount - $packetCounter;
-        $chunkCount = 7 if $chunkCount > 7;
+        my $tot_packet = '';
+        
+        $chunkCount = TS_IN_UDP_PACKET if $chunkCount > TS_IN_UDP_PACKET;
         
         $multicast->mcast_send(substr( $mts, $packetCounter * MPEG_SIZE, $chunkCount * MPEG_SIZE));
-        $packetCounter += $chunkCount;
         
+        $packetCounter += $chunkCount;
+        my $currTime = gettimeofday;
         if ($cfg{'TOT_TDT'} eq '1') {
-            if ((gettimeofday - $lasTOTime) > TOT_max_interval) {
-                # print "TOT ".(gettimeofday - $playTime)."\n";
-                # TOD TDT
-                my $epoch = time; #берем текущее время
-                my $tm = gmtime($epoch); # Время по UTC
-                #получаем дату по модифицированному юлианскому календарю.
-                my $mon = $tm->mon();
-                my $year = $tm->year();
-                my $mday = $tm->mday();
-                ++$mon;
-                my $l = $mon == 1 || $mon == 2 ? 1 : 0;
-                my $jmd = 14956 + $mday + int( ( $year - $l ) * 365.25 ) + int( ( $mon + 1 + $l * 12 ) * 30.6001 );
+            if (($currTime - $lastTOTtime) > TOT_max_interval) {
+                my $gmtm = gmtime(time); # Время по UTC
+                my $mont = $gmtm->mon();
+                my $year = $gmtm->year();
+                my $mday = $gmtm->mday();
+                ++$mont;
+                my $l = $mont == 1 || $mont == 2 ? 1 : 0;
+                # получаем дату по модифицированному юлианскому календарю.
+                my $jmd = 14956 + $mday + int( ( $year - $l ) * 365.25 ) + int( ( $mont + 1 + $l * 12 ) * 30.6001 );
                 
-                my $h = pack("C", ($tm->hour()/10) <<4 | ($tm->hour() % 10)); # 59 минут в Hex должны выглядеть как 59 а не 3b
-                my $m = pack("C", ($tm->min()/10)  <<4 | ($tm->min()  % 10));
-                my $s = pack("C", ($tm->sec()/10)  <<4 | ($tm->sec()  % 10));
+                my $h = $gmtm->hour();
+                my $m = $gmtm->min();
+                my $s = $gmtm->sec();
+                # 59 минут в Hex должны выглядеть как 59, а не 3b
+                $h = pack("C", ($h/10) <<4 | ($h % 10)); 
+                $m = pack("C", ($m/10) <<4 | ($m % 10));
+                $s = pack("C", ($s/10) <<4 | ($s % 10));
                 
                 my $hex_time = pack('n',$jmd).$h.$m.$s;
                 
-                my $tot_packet = "\x47\x40\x14"                            # MPEG TS заголовок
-                                . chr(16 + $ContinuityTDT)."\x00"          # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
-                                . "\x73\x70".chr(13+(13*TOT_regions_cnt))  # TOT длина заголовока тоже сразу укзана 1a = 26 байт
-                                . $hex_time                                # Время
-                                . $cfg{'TOT'}                              # description
-                                . pack('N',crc( "\x73\x70".chr(13+(13*TOT_regions_cnt)).$hex_time.$cfg{'TOT'}, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); # mpeg2 crc
+                $tot_packet = "\x73\x70".chr(13+(13*TOT_regions_cnt))    # TOT длина заголовока 
+                              . $hex_time                                # Время
+                              . $cfg{'TOT'};                             # description
+                $tot_packet = "\x47\x40\x14"                             # MPEG TS заголовок TOT = 14 PID
+                              . chr(16 + $ContinuityTDT)."\x00"          # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
+                              . $tot_packet                              # TOT длина заголовока . Время . description 
+                              . pack('N',crc( $tot_packet, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); # mpeg2 crc
                 $tot_packet .= "\xff" x (MPEG_SIZE-length($tot_packet)); # дополним нулевыми пакетами
                 
-                if ($ContinuityTDT < 15 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
-                
-                my $tdt_packet = "\x47\x40\x14"                    # MPEG TS заголовок 
-                                . chr(16 + $ContinuityTDT)."\x00"  # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
-                                . "\x70\x70\x05"                   # TDT заголовок и длина пакета 5 байт
-                                . $hex_time;                       # 2 байта дата в MJD и 3 байта время как есть.
-                $tdt_packet.="\xff" x (MPEG_SIZE-length($tdt_packet)); # дополним нулевыми пакетами
+                my $tdt_packet = "\x47\x40\x14"                          # MPEG TS заголовок TDT = 14 PID
+                              . chr(16 + $ContinuityTDT)."\x00"          # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
+                              . "\x70\x70\x05"                           # TDT заголовок и длина пакета 5 байт
+                              . $hex_time;                               # 2 байта дата в MJD и 3 байта время как есть.
+                $tdt_packet .= "\xff" x (MPEG_SIZE-length($tdt_packet)); # дополним нулевыми пакетами
                 
                 if ($ContinuityTDT < 15 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
+                $tot_packet .= $tdt_packet;
                 
-                $multicast->mcast_send( $tot_packet.$tdt_packet.$tail_packets );
-                $lasTOTime = gettimeofday;
+                $tot_packet .= (("\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4)) x (TS_IN_UDP_PACKET - (length( $tot_packet ) % MPEG_SIZE)));
+                $multicast->mcast_send( $tot_packet );
+                
+                $lastTOTtime = $currTime;
             }
         }
+        
         usleep( $gap );
     }
     
-    return ( $lasTOTime, $ContinuityTDT);
+    return ( $lastTOTtime, $ContinuityTDT );
 }
 
 # заменим симо=волы, которые некорректно отборажаються на ТВ
