@@ -1,1 +1,3 @@
-CreateObject("Wscript.Shell").Run "run_epg.bat", 0, False
+Dim WshShell
+Set WshShell = WScript.CreateObject("WScript.Shell")
+WshShell.Run WshShell.CurrentDirectory & "\OpenEPG.cmd", 0, False
