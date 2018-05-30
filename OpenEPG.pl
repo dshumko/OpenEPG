@@ -30,7 +30,8 @@ use constant {
     TOT_regions_cnt  => 9,   # Count regions in TOT 
     CHUNK_TIME       => 30,  # calculate the chunk for X seconds
     MPEG_SIZE        => 188, # MPEG ts packet size
-    TS_IN_UDP_PACKET => 7    # TS packets in a typical UDP packet. 7 recommended, because 7*188 = 1316 < max UDP packet size (1432))
+    TS_IN_UDP_PACKET => 7,   # TS packets in a typical UDP packet. 7 recommended, because 7*188 = 1316 < max UDP packet size (1432))
+    HBBTV_interval   => 10   # HBBTV table interval
 };
 
 $| = 1; # добавляет возможность перенаправлять вывод в файл. пример > openepg.log
@@ -146,6 +147,7 @@ while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot
     $epg_config{"UDPhost"} = $UDPhost;
     $epg_config{"UDPport"} = $UDPport;
     $epg_config{"TS_NAME"} = $tsname;
+    $epg_config{'HBBTV'} = "";
     
     $epg_config{"TOT_TDT"}  = 0; # Формировать таблицу TOT и TDT
     $epg_config{"SHOW_EXT"} = 0; # Передавать расш. описание
@@ -187,6 +189,52 @@ while (my ($dvbs_id, $aostrm, $country, $UDPhost, $UDPport, $desc, $tsname, $tot
                            . $TOT;                              # TOT дескриптор
     }
     
+    #if ($epg_config{"DVBS_ID"} == 1002) 
+    { # HBBTV
+        # временно, передаем заранее подготовленный AIT HbbTV пакет
+        my $hbbtv_body = "\x47"                       # MPEG TS заголовок \x47 - Начало TS 
+                        . pack("n", 16384 + 501)      # (3 бита = 010 нет ошибок, есть данные, норм. приоритет) + PID (13 бит) = 501 \x41\xF5
+                        . chr(16 + 0)                 # (4-ре бита = 0001(16) пакет не зашифрован, без полей адаптации и есть данные) + Счётчик Непрерывности 
+                        . "\x00"                      # Всегда 0
+                        # -------------------------------- Application Information Table (AIT) --------------------------------------------------------
+                        . "\x74"                      # Application Information Table (AIT)
+                        . "\xF0\x60\x00\x10\xC3\x00\x00\xF0\x09"
+                        # -------------------------------- External application authorization descriptor (0x05) ---------------------------------------
+                        . "\x05\x07\x00\x00"
+                        . pack("n", 10)               # OrganisationID = 10 this is a demo value
+                        . pack("n", 1001)             # ApplicationID = 1001 this is a demo value. This number corresponds to a trusted application. 
+                        . "\x05"
+                        . "\xF0\x4A\x00\x00\x00\x0A\x03\xE9\x02\xF0\x41"
+                        # -------------------------------- transport_protocol_descriptor --------------------------------------------------------------
+                        . "\x02"                      # DescriptorTag: 2 (0x02) transport_protocol_descriptor URL
+                        . "\x1E"                      # DescriptorLength 30
+                        . "\x00\x03"                  # protocol_id = 3
+                        . "\x03"                      # 3 = HTTP transport protocol
+                        . "\x19"                      # Length 25 - URL
+                        . "http://itv.ard.de/ardepg/" # URL_base = http://itv.ard.de/ardepg/
+                        . "\x00"                      # URL_extensions = [] пустое
+                        # -------------------------------- application_descriptor --------------------------------------------------------------------
+                        . "\x00"                      # DescriptorTag: 0 (0x00) application_descriptor
+                        . "\x09"                      # DescriptorLength
+                        . "\x05"                      # Application profiles length   
+                        . "\x00\x00\x01\x01\x01"      # Version 1.1.1
+                        . "\xFF"                      #
+                        . "\x01"                      # Application priority
+                        . "\x03"                      # visibility = 3 - the applications is visible to the user
+                        # -------------------------------- application_name_descriptor ---------------------------------------------------------------
+                        . "\x01"                      # DescriptorTag: 01 (0x01) application_name_descriptor
+                        . "\x09"                      # DescriptorLength 9 = RUS + 1 + TVSAT
+                        . "RUS"                       # RUS 3
+                        . "\x05"                      # Length 1
+                        . "TVSAT"                     # TVSAT 5
+                        # -------------------------------- simple_application_location_descriptor ----------------------------------------------------
+                        . "\x15"                      # DescriptorTag: 21 (0x15) simple_application_location_descriptor
+                        . "\x09"                      # DescriptorLength
+                        . "index.php";                # initial_path_bytes \x69\x6E\x64\x65\x78\x2E\x70\x68\x70
+                         
+        $epg_config{'HBBTV'} = $hbbtv_body;
+    }
+    
     push @threads, threads->create(\&RunThread, %epg_config);
     #RunThread(%epg_config); #for debug run without threads
 }
@@ -217,7 +265,9 @@ sub RunThread {
 
     my $continuityCounter = 0;
     my $lastTOTtime = gettimeofday;
+    my $lastHBBTVtime = $lastTOTtime;
     my $ContinuityTDT = 0;
+    my $ContinuityHBBTV = 0;
     
     if ($cfg{"BIND_IP"} ne '0.0.0.0') {
         $tsSocket->mcast_if($cfg{"BIND_IP"});
@@ -294,7 +344,7 @@ sub RunThread {
             if (defined $threadSendUDP) {
                 # подождем пока закончится поток с пересылкой по UDP с учетом времени формирования
                 my $Time18 = gettimeofday;
-                ( $lastTOTtime, $ContinuityTDT ) = $threadSendUDP->join();
+                ( $lastTOTtime, $ContinuityTDT, $lastHBBTVtime, $ContinuityHBBTV ) = $threadSendUDP->join();
                 
                 undef $threadSendUDP;
                 if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\twait thrd\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $Time18)); }
@@ -309,7 +359,7 @@ sub RunThread {
                 if ( $continuityCounter > 0x0f ) { $continuityCounter = 0; }
             }
             
-            $threadSendUDP = threads->create({'context' => 'list'}, 'SendUDP', ( $tsSocket, $lastTOTtime, $ContinuityTDT, $$meta[1], $mts, %cfg));
+            $threadSendUDP = threads->create({'context' => 'list'}, 'SendUDP', ( $tsSocket, $lastTOTtime, $ContinuityTDT, $lastHBBTVtime, $ContinuityHBBTV, $$meta[1], $mts, %cfg));
         }
         else { printf( "TSID %s EPG data not found\n", $cfg{"TS_NAME"}); }
         # Если нужно, сохраним в файл
@@ -551,7 +601,7 @@ sub BuildEPG {
 }
 
 sub SendUDP {
-    my ($multicast, $lastTOTtime, $ContinuityTDT, $interval, $mts, %cfg) = @_;
+    my ($multicast, $lastTOTtime, $ContinuityTDT, $lastHBBTVtime, $ContinuityHBBTV, $interval, $mts, %cfg) = @_;
     
     my $mtsCount = length( $mts ) / MPEG_SIZE;
     
@@ -569,11 +619,18 @@ sub SendUDP {
     # play packets
     while ($packetCounter < $mtsCount) {
         my $chunkCount = $mtsCount - $packetCounter;
+        
+        my $hbbtv_packet = '';
         my $tot_packet = '';
         
         $chunkCount = TS_IN_UDP_PACKET if $chunkCount > TS_IN_UDP_PACKET;
         
         $multicast->mcast_send(substr( $mts, $packetCounter * MPEG_SIZE, $chunkCount * MPEG_SIZE));
+        
+        open( my $ts, ">>", $epg_config{"TMP"}."eit".$cfg{"DVBS_ID"}.".ts" );
+        binmode( $ts);
+        print( $ts substr( $mts, $packetCounter * MPEG_SIZE, $chunkCount * MPEG_SIZE) );
+        close( $ts );
         
         $packetCounter += $chunkCount;
         my $currTime = gettimeofday;
@@ -615,18 +672,41 @@ sub SendUDP {
                 
                 if ($ContinuityTDT < 15 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
                 $tot_packet .= $tdt_packet;
-                
-                $tot_packet .= (("\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4)) x (TS_IN_UDP_PACKET - (length( $tot_packet ) % MPEG_SIZE)));
-                $multicast->mcast_send( $tot_packet );
-                
                 $lastTOTtime = $currTime;
             }
+        }
+        
+        if ($cfg{'HBBTV'} ne '') {
+            if (($currTime - $lastHBBTVtime) > HBBTV_interval) {
+                $hbbtv_packet = $cfg{'HBBTV'};
+                substr($hbbtv_packet , 3, 1, chr( 0b00010000 | ( $ContinuityHBBTV & 0x0f ) ) ); # подставим счетчик последовательности
+                $hbbtv_packet   = $hbbtv_packet . pack('N',crc( $hbbtv_packet, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); # mpeg2 crc
+                $hbbtv_packet .= "\xff" x (MPEG_SIZE-length($hbbtv_packet)); # дополним нулевыми пакетами до 188 байт
+                
+                if ($ContinuityHBBTV < 15 ) { $ContinuityHBBTV++; } else {$ContinuityHBBTV = 0; }
+                
+                $lastHBBTVtime = $currTime;
+            }
+        }
+        
+        # Объединим пакеты для экономии трафика 
+        $hbbtv_packet .= $tot_packet;
+        if ($hbbtv_packet ne "") {
+            my $i = length( $hbbtv_packet ) / MPEG_SIZE;
+            $hbbtv_packet .= (("\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4)) x (TS_IN_UDP_PACKET - $i));
+            $multicast->mcast_send( $hbbtv_packet );
+            
+            open( my $ts, ">>", $epg_config{"TMP"}."eit".$cfg{"DVBS_ID"}.".ts" );
+            binmode( $ts);
+            print( $ts $hbbtv_packet );
+            close( $ts );
+            
         }
         
         usleep( $gap );
     }
     
-    return ( $lastTOTtime, $ContinuityTDT );
+    return ( $lastTOTtime, $ContinuityTDT, $lastHBBTVtime, $ContinuityHBBTV  );
 }
 
 # заменим симо=волы, которые некорректно отборажаються на ТВ
