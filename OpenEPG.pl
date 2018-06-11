@@ -557,7 +557,11 @@ sub SendUDP {
     
     # add stuffing packets to have a multiple of TS_IN_UDP_PACKET packets in the buffer
     my $i = $mtsCount % TS_IN_UDP_PACKET;
-    $mts .= (("\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4)) x (TS_IN_UDP_PACKET-$i));    # stuffing packet
+    while ( $i > 0 && $i < 7) {
+        $mts .= "\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4);    # stuffing packet
+        $i += 1;
+    }
+    # $mts .= (("\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4)) x (TS_IN_UDP_PACKET-$i));    # stuffing packet
     
     # correct the count of packets
     $mtsCount = length( $mts ) / MPEG_SIZE;
@@ -606,7 +610,7 @@ sub SendUDP {
                               . $tot_packet                              # TOT длина заголовока . Время . description 
                               . pack('N',crc( $tot_packet, 32, 0xffffffff, 0x00000000, 0, 0x04C11DB7, 0, 0)); # mpeg2 crc
                 $tot_packet .= "\xff" x (MPEG_SIZE-length($tot_packet)); # дополним нулевыми пакетами
-                
+                if ($ContinuityTDT < 15 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
                 my $tdt_packet = "\x47\x40\x14"                          # MPEG TS заголовок TDT = 14 PID
                               . chr(16 + $ContinuityTDT)."\x00"          # Счётчик Непрерывности + без поля адаптации  + Не зашифрованный пакет.
                               . "\x70\x70\x05"                           # TDT заголовок и длина пакета 5 байт
