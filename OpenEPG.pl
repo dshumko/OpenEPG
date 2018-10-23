@@ -50,6 +50,7 @@ $epg_config{"DAYS"}        = 7;               # На сколько дней ф�
 $epg_config{"TMP"}         = cwd;             # Куда сохранять времменые файлы
 $epg_config{"USEMEMORY"}   = 0;               # создавать файлы базы в памяти
 $epg_config{"EXPORT_TS"}   = '0';             # Экспортировать TS в файл
+$epg_config{"DVBN_ID"}     = '';              # ИД сети в которую передаем 
 $epg_config{"NETWORK_ID"}  = '';              # NID сети с которой работает генератор
 $epg_config{"ONID"}        = '';              # ONID сети с которой работает генератор
 $epg_config{"READ_EPG"}    = 60;              # Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать
@@ -130,6 +131,10 @@ if ($epg_config{"NETWORK_ID"} ne '') {
 
 if ($epg_config{"ONID"} ne '') {
     $sel_q = $sel_q." and n.ONID = ".$epg_config{"ONID"};
+}
+
+if ($epg_config{"DVBN_ID"} ne '') {
+    $sel_q = $sel_q." and n.DVBN_Id = ".$epg_config{"DVBN_ID"};
 }
 
 #$sel_q = $sel_q." and s.Tsid = 1001 "; # for debug ########################################################### DEBUG only
@@ -545,7 +550,7 @@ sub BuildEPG {
         # Extract the snippet 
         my $pes = $cfg{"tsEpg"}->getEit( $pid, CHUNK_TIME );
         $cfg{"tsCarousel"}->addMts( $pid, \$pes, CHUNK_TIME * 1000 );
-        printf( "TSID %s bitrate %.3f kbps (%s buld time %.3f)\n", $cfg{"TS_NAME"}, ( length( $pes ) * 8 / CHUNK_TIME / 1000 ), (scalar localtime(time())), (gettimeofday - $SendTime));
+        printf( "TSID %s bitrate %.3f kbps (%s build time %.3f)\n", $cfg{"TS_NAME"}, ( length( $pes ) * 8 / CHUNK_TIME / 1000 ), (scalar localtime(time())), (gettimeofday - $SendTime));
     }
     return (gettimeofday - $SendTime);
 }
@@ -557,11 +562,10 @@ sub SendUDP {
     
     # add stuffing packets to have a multiple of TS_IN_UDP_PACKET packets in the buffer
     my $i = $mtsCount % TS_IN_UDP_PACKET;
-    while ( $i > 0 && $i < 7) {
+    while ( $i > 0 && $i < TS_IN_UDP_PACKET) {
         $mts .= "\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4);    # stuffing packet
         $i += 1;
     }
-    # $mts .= (("\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4)) x (TS_IN_UDP_PACKET-$i));    # stuffing packet
     
     # correct the count of packets
     $mtsCount = length( $mts ) / MPEG_SIZE;

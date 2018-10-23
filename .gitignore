@@ -1,13 +1,12 @@
 *.exe
 *.~*
-*.bat
 *.stackdump
 OpenEPG.exe_
 .idea/
 examples/
 Service/
-db.sqlite/carousel.sqlite
-db.sqlite/eit.sqlite
+db.sqlite/
+tmp/
 _many_/OpenEPG.pl
 .php_cs.cache
 *.gz
