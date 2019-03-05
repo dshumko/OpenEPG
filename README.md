@@ -63,6 +63,7 @@ apt-get install libdbd-firebird-perl
 ```
 apt-get install build-essential
 ```
+**Внимание!** Из cpan убраны пакеты *DVB::Epg и DVB::Carousel* продублировал в каталоге *lib*.
 
 #### Описание параметров INI файла
 
