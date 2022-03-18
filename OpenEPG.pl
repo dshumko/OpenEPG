@@ -1,4 +1,4 @@
-﻿#!/usr/bin/perl
+#!/usr/bin/perl
 
 use strict;
 use warnings;
@@ -17,7 +17,7 @@ use Time::HiRes qw(gettimeofday);
 use Config::INI::Reader;
 use Cwd;
 use threads;
-use IO::Socket::Multicast;
+use Socket;
 use IO::File;
 use Digest::CRC qw(crc);
 use FindBin qw($Bin);
@@ -54,7 +54,7 @@ $epg_config{"EXPORT_TS"}   = '0';             # Экспортировать TS 
 $epg_config{"DVBN_ID"}     = '';              # ИД сети в которую передаем 
 $epg_config{"NETWORK_ID"}  = '';              # NID сети с которой работает генератор
 $epg_config{"ONID"}        = '';              # ONID сети с которой работает генератор
-$epg_config{"READ_EPG"}    = 60;              # Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать
+$epg_config{"READ_EPG"}    = 5;               # Через сколько минут будем проверять данные в базе A4on.TV и если изменились перечитывать
 $epg_config{"DESC_LEN"}    = 500;             # Количество символов в описании
 $epg_config{"RUS_PAGE"}    = 1;               # Как кодировать язык. согласно EN 300 468, ISO/IEC 8859-5 [27] Latin/Cyrillic alphabe может быть 1 = \0x01 (Table A.3) , а может быть 2 = \0x10\0x00\0x5 (Table A.4)
 $epg_config{"TEXT_IN_UTF"} = 0;               # Передавать текст событий в UTF8 а не в ISO 
@@ -62,7 +62,8 @@ $epg_config{"LONGREADLEN"} = 0;               # Если возникает ош
 $epg_config{"TOT_TDT"}     = 0;               # Формировать таблицу TOT и TDT
 $epg_config{"REGION_ID"}   = 0;               # С какого Region_ID генерировать 8-мь регионов для TOT 
 $epg_config{"PF_ONLY"}     = 1;               # Для не текущего TS создавать только таблица текущая/следующая программа present/following
-# устарело $epg_config{"RELOAD_TIME"} = 5;           # Через сколько минут перечитывать поток
+$epg_config{"DESC_FORMAT"} = '';              # Формат описания AGE, DESC, GENR, YEAR, ACTR, DRCT, CNTR
+$epg_config{"TTL"}         = 5;               # TTL пакетов (время жизни)
 
 # Проверим, если ini файл с сигнатурой BOM, то удалим ее
 my $fh = new IO::File "< $ini_file" or die "Cannot open $ini_file : $!";
@@ -112,11 +113,20 @@ if ((substr($epg_config{"TMP"}, -1) ne '/') and (substr($epg_config{"TMP"}, -1) 
 }
 mkdir $epg_config{"TMP"};
 
+my $fbDb;
+
 # прочитаем настройки сети DVB из базы A4on.TV
-my $fbDb = DBI->connect("dbi:Firebird:db=".$epg_config{"DB_NAME"}.";ib_charset=UTF8",
-    $epg_config{"DB_USER"},
-    $epg_config{"DB_PSWD"},
-    { RaiseError => 1, PrintError => 1, AutoCommit => 1, ib_enable_utf8 => 1 } );
+do {
+    $fbDb = DBI->connect("dbi:Firebird:db=".$epg_config{"DB_NAME"}.";ib_charset=UTF8",
+        $epg_config{"DB_USER"},
+        $epg_config{"DB_PSWD"},
+        { RaiseError => 0, PrintError => 0, AutoCommit => 1, ib_enable_utf8 => 1 } );
+    
+    if (!$fbDb) {
+        printf("%s Error connect to Firebird db %s, will try again in %.0f minutes\n", (scalar localtime(time())), $epg_config{"DB_NAME"}, $epg_config{'READ_EPG'});
+        usleep( $epg_config{'READ_EPG'} * 60 * 1000000 ); # подождем и попробуем переподключиться через READ_EPG минут
+    }
+} until($fbDb);
 
 if ($epg_config{"LONGREADLEN"} > 0) { $fbDb->{LongReadLen}=$epg_config{"LONGREADLEN"}; }
 
@@ -224,20 +234,24 @@ sub RunThread {
     $cfg{"tsEpg"} = DVB::Epg->new( $eitDb ) || die( "Error opening EIT database [$eitDb]: $!");
     $cfg{"tsCarousel"} = DVB::Carousel->new( $carouselDb ) || die( "Error opening carousel database [$carouselDb]: $!");
 
-    my $tsSocket = IO::Socket::Multicast->new(Proto => 'udp') || die "Couldn't open socket";
-
     my $continuityCounter = 0;
     my $lasTOTime = gettimeofday;
     my $ContinuityTDT = 0;
     my $tail_packets;
     for(my $i=0;$i<5;$i++) { $tail_packets .= "\x47\x1f\xff\x10"."\xff" x (MPEG_SIZE-4); }  #делаем пачку из 7 нулевых пакетов 
     
-    if ($cfg{"BIND_IP"} ne '0.0.0.0') {
-        $tsSocket->mcast_if($cfg{"BIND_IP"});
+    socket( my $tsSocket, PF_INET, SOCK_DGRAM, getprotobyname('udp')) or die( "Error opening udp socket: $!");
+    setsockopt($tsSocket, SOL_SOCKET, SO_REUSEADDR, 1);
+    if (($cfg{"TTL"}+0) > 1) {
+        setsockopt($tsSocket, getprotobyname('ip'), 10, ($cfg{"TTL"}+0)); #IP_MULTICAST_TTL
     }
-    $tsSocket->mcast_ttl(10);
-    $tsSocket->mcast_loopback(1);
-    $tsSocket->mcast_dest($cfg{"UDPhost"}.':'.$cfg{"UDPport"});
+    
+    if ($cfg{"BIND_IP"} ne '0.0.0.0') {
+        bind( $tsSocket, pack_sockaddr_in($cfg{"UDPport"}, inet_aton($cfg{"BIND_IP"}))) or die "Can't bind to port!\n";
+    }
+
+    my $ipaddr = inet_aton( $cfg{"UDPhost"});
+    my $portaddr = sockaddr_in( $cfg{"UDPport"}, $ipaddr);
 
     my $lastCheckEPG = '';
 
@@ -290,7 +304,8 @@ sub RunThread {
                 if ($cfg{"DEBUG"}) { printf( "DEBUG\t%s\t%s\tCheck EPG\t%.3f\n", $cfg{"TS_NAME"}, (scalar localtime(time())), (gettimeofday - $DebugTime)); }
             }
             else {
-                    printf( "TSID %s\t%s\tCan't connect to %s, will try again in %.0f minutes\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $cfg{"DB_NAME"}, $cfg{'READ_EPG'} );
+                printf( "TSID %s\t%s\tCan't connect to %s, will try again in %.0f minutes\n", $cfg{"TS_NAME"}, (scalar localtime(time())), $cfg{"DB_NAME"}, $cfg{'READ_EPG'} );
+                usleep( $cfg{'READ_EPG'} * 60 * 1000000 ); # подождем и попробуем переподключиться через READ_EPG минут
             }
         }
         
@@ -327,7 +342,7 @@ sub RunThread {
                 if ( $continuityCounter > 0x0f ) { $continuityCounter = 0; }
             }
             
-            $threadSendUDP = threads->create({'context' => 'list'}, 'SendUDP', ( $tsSocket, $lasTOTime, $ContinuityTDT, $tail_packets, $$meta[1], $mts, %cfg));
+            $threadSendUDP = threads->create({'context' => 'list'}, 'SendUDP', ( $tsSocket, $portaddr, $lasTOTime, $ContinuityTDT, $tail_packets, $$meta[1], $mts, %cfg));
         }
         else { printf( "TSID %s EPG data not found\n", $cfg{"TS_NAME"}); }
         # Если нужно, сохраним в файл
@@ -353,17 +368,17 @@ sub InitEitDb {
     my $dvbsid = $cfg{"DVBS_ID"};
     my $number_of_segments = $cfg{"DAYS"} * 8;
     
-    my $sel_q = " select sc.Sid, n.Onid, coalesce(sc.Tsid, s.Tsid) Tsid, n.Nid, sc.Ch_Id, iif(s.Dvbs_Id = $dvbsid, 1, 0) as isactual
+    my $sel_q = " select sc.Sid, coalesce(sc.CONID, n.Onid), coalesce(sc.Tsid, s.Tsid) Tsid, coalesce(sc.CNID, n.Nid), sc.Ch_Id, iif(s.Dvbs_Id = $dvbsid, 1, 0) as isactual
                     from Dvb_Network n
                         inner join Dvb_Streams s on (n.Dvbn_Id = s.Dvbn_Id)
                         inner join Dvb_Stream_Channels sc on (s.Dvbs_Id = sc.Dvbs_Id)
-                    where (not sc.Sid is null) and ";
+                    where (not sc.Sid is null) ";
     # Будем ли передавать данные другого потока
     if ($cfg{"ACTUAL_OTHER"} == 1) {
-        $sel_q = $sel_q." n.Dvbn_Id in (select a.Dvbn_Id from Dvb_Streams a where a.Dvbs_Id = $dvbsid) ";
+        $sel_q = $sel_q." and n.Dvbn_Id in (select a.Dvbn_Id from Dvb_Streams a where a.Dvbs_Id = $dvbsid) ";
     }
     else {
-        $sel_q = $sel_q." s.Dvbs_Id = $dvbsid ";
+        $sel_q = $sel_q." and s.Dvbs_Id = $dvbsid ";
     }
 
     my $sth_s = $tsDb->prepare($sel_q);
@@ -389,11 +404,11 @@ sub ReadEpgData {
     };
 
     my $sel_q = "select ch_id, date_start, date_stop, title, left(description, ".$cfg{"DESC_LEN"}.") description, minage, lower(lang), dvbgenres 
-                   from Get_Epg($dvbsid, current_date, dateadd(day, ".$cfg{"DAYS"}.", current_date), ".$cfg{"ACTUAL_OTHER"}.")";
+                   from Get_Epg($dvbsid, current_date, dateadd(day, ".$cfg{"DAYS"}.", current_date), ".$cfg{"ACTUAL_OTHER"}.", '".$cfg{"DESC_FORMAT"}."')";
     my $sth_s = $tsDb->prepare($sel_q, $attr);
     $sth_s->execute or die "ERROR: Failed execute SQL Get_Epg !";
     
-    while (my ($program, $start, $stop, $title, $synopsis, $minage, $lang, $dvbgenres) = $sth_s->fetchrow_array()) {
+    while (my ($program, $start, $stop, $title, $synopsis, $minage, $lang, $dvbgenres, $genres) = $sth_s->fetchrow_array()) {
         #lang codes http://en.wikipedia.org/wiki/List_of_ISO_639-2_codes
         if (!defined $lang) {
             $lang = $cfg{"COUNTRY"}
@@ -420,7 +435,7 @@ sub ReadEpgData {
         $event->{service_id} = $program;
 
         my ($to_code_page, $lang_prefix, $title_ISO, $synopsis_ISO);
-
+        
         # iso codes http://en.wikipedia.org/wiki/ISO/IEC_8859
         #
         # define codepage according to Annex.2 of EN 300 468
@@ -471,7 +486,13 @@ sub ReadEpgData {
                 $title_ISO = encode("iso-8859-2", $title);
                 $synopsis_ISO = encode("iso-8859-2", $synopsis);
                 $lang_prefix = "\x10\x00\x2";
-            } 
+            }
+            #elsif ($lang eq 'kaz') # 	kaz	kk	kazakh не нашел таблицу iso-8859 для казахского
+            #{
+            #    $title_ISO = encode("ptcp154", $title);
+            #    $synopsis_ISO = encode("ptcp154", $synopsis);
+            #    $lang_prefix = "\x10\x00\x2";
+            #}
             elsif (
                 ($lang eq 'arm') # Armenia - Հայաստան код может быть и hye https://en.wikipedia.org/wiki/Armenian_language
             )
@@ -569,7 +590,7 @@ sub BuildEPG {
 }
 
 sub SendUDP {
-    my ($multicast, $lasTOTime, $ContinuityTDT, $tail_packets, $interval, $mts, %cfg) = @_;
+    my ($multicast, $portaddr, $lasTOTime, $ContinuityTDT, $tail_packets, $interval, $mts, %cfg) = @_;
     
     my $mtsCount = length( $mts ) / MPEG_SIZE;
     my $packetCounter = 0;
@@ -601,7 +622,7 @@ sub SendUDP {
         my $chunkCount = $mtsCount - $packetCounter;
         $chunkCount = 7 if $chunkCount > 7;
         
-        $multicast->mcast_send(substr( $mts, $packetCounter * MPEG_SIZE, $chunkCount * MPEG_SIZE));
+        send( $multicast, substr( $mts, $packetCounter * MPEG_SIZE, $chunkCount * MPEG_SIZE), 0, $portaddr);
         $packetCounter += $chunkCount;
         
         if ($cfg{'TOT_TDT'} eq '1') {
@@ -642,7 +663,7 @@ sub SendUDP {
                 
                 if ($ContinuityTDT < 15 ) { $ContinuityTDT++; } else {$ContinuityTDT = 0; }
                 
-                $multicast->mcast_send( $tot_packet.$tdt_packet.$tail_packets );
+                send( $multicast, $tot_packet.$tdt_packet.$tail_packets, 0, $portaddr);
                 $lasTOTime = gettimeofday;
             }
         }

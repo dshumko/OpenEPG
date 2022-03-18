@@ -48,16 +48,16 @@ cpan Digest::CRC
 cpan DVB::Epg 
 cpan DVB::Carousel
 cpan Config::INI::Reader
-cpan IO::Socket::Multicast
 ```
 
-Как альтернатива можно поставить модули через apt-get, например:
+Как альтернатива DBD::Firebird, модуль работы с Firebird, можно поставить модули через apt-get, например:
 ```
 apt-get install libdbd-firebird-perl 
 ```
 
 Если ставили из cpan, то не забываем заменить файлы Carousel.pm и Epg.pm
-в каталоге /usr/local/share/perl/5.20.2/DVB/ на файлы из репозитория.
+в каталоге /usr/local/share/perl/5.20.2/DVB/ на файлы из репозитория, 
+где вместо 5.20.2 нужно указать версию perl установленной на сервере.
 
 Не забываем поставить make:
 ```
@@ -98,6 +98,34 @@ apt-get install build-essential
     RELOAD_TIME = 5
     EXPORT_TS   = 0
     NETWORK_ID  = 1
+
+#### Установка на Debian 10
+```
+apt install build-essential
+cpan DBI
+cpan DBD::SQLite
+cpan Digest::CRC
+cpan Config::INI::Reader
+apt install firebird3.0-server
+apt install libdbd-firebird-perl
+```
+если нужен PHP 7.3 с поддержкой Firebird
+```
+apt install php-cli
+apt install php-mbstring
+apt install php-curl
+apt install php-dev firebird-dev firebird3.0 firebird3.0-common firebird3.0-server
+wget https://github.com/FirebirdSQL/php-firebird/archive/master.zip
+phpize
+CPPFLAGS=-I/usr/include/firebird ./configure
+make
+```
+положить два файла в каталог DVB
+```
+mkdir /usr/share/perl/5.28.1/DVB/ 
+/usr/share/perl/5.28.1/DVB/Carousel.pm
+/usr/share/perl/5.28.1/DVB/Epg.pm
+```
 
 #### Координаты
 
