@@ -69,11 +69,21 @@ foreach($chennals as $ch) {
     
     foreach ($epg as $prg) {
         $title  = $prg['TITLE'].'.';
-        if ($prg['MINAGE'] <> '') $title .= ' '.$prg['MINAGE'].'+';
+        $title = str_replace("\n", '', $title);
+        $title = htmlentities($title);
+        $title = str_replace("&nbsp;",' ', $title);
+        if ($prg['MINAGE'] <> '') $title .= ' ['.$prg['MINAGE'].'+]';
         if ($prg['GENRES'] <> '') $title .= ' '.$prg['GENRES'].'.';
         if ($prg['COUNTRY'] <> '') $title .= ' '.$prg['COUNTRY'].'.';
         if ($prg['CREATE_YEAR'] <> '') $title .= ' '.$prg['CREATE_YEAR'].'.';
-        if ($prg['DESCRIPTION'] <> '') $title .= ' '.$prg['DESCRIPTION'].'.';
+        
+        if ($prg['DESCRIPTION'] <> '') {
+            $desc  = $prg['DESCRIPTION'].'.';
+            $desc = str_replace("\n", '', $desc);
+            $desc = htmlentities($desc);
+            $desc = str_replace("&nbsp;",' ', $desc);
+            $title .= ' '.$desc.'.';
+        }
         if ($prg['DIRECTED'] <> '') $title .= ' '.$prg['DIRECTED'].'.';
         if ($prg['ACTORS'] <> '') $title .= ' '.$prg['ACTORS'].'.';
         $programme = @iconv("UTF-8", "windows-1251", $title);
